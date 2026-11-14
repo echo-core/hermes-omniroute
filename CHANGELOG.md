@@ -32,3 +32,6 @@
   tracking, while binding sourceURL to the requested page.
 - Reject non-web final URLs and include the explicit no-rescue setting in the
   example configuration.
+
+- Verify distinct context metadata for two keys at the same gateway, including
+  warm scope switches and fresh-process disk-cache reuse, with native Hermes.

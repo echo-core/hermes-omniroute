@@ -81,8 +81,9 @@ The running model registry can retain a disabled/removed provider on this build.
 The test records that observation and verifies model removal again in a fresh
 native process. Restart the owning runtime after model-provider replacement or
 removal. This is a native core cache limitation; the backend's owned registrations
-unload in-process. Full warm/cold catalog and context-cache isolation is a separate
-gate from asserting per-profile request arguments.
+unload in-process. The native context-cache probe also verifies same-gateway/different-key metadata
+isolation across warm scope switches and fresh-process disk-cache reuse. Its HTTP
+catalog responses are synthetic, independent of live provider dispatch.
 
 When selecting the gateway route, set native web.keyless_rescue to false to prevent
 core's default free-provider rescue from sending a failed gateway request directly
