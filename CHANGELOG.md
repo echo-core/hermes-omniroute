@@ -7,3 +7,11 @@
 - Profile-scoped credentials/config, explicit gateway URL, no redirects/retries.
 - Add16offline wire-contract/security/error tests.
 - Initial profile acceptance pending; optional voice/video modules not implemented.
+
+## Unreleased
+
+- Added a native-install reproduction of the model/backend lifecycle gap.
+- Documented a proposed upstream model export under one backend identity.
+- Fixed generic context lookup to resolve the configured endpoint and current
+  profile's key. Declared the endpoint variable separately from API key aliases.
+- Added seven offline model regressions. All 23 offline model/web tests pass.
