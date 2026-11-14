@@ -4,7 +4,8 @@ Native Hermes plugins maintained together for chat/model discovery, Regular/Comp
 images, and web search/extraction through a scoped OmniRoute gateway.
 
 The model and image modules are based on working native Hermes integrations.
-These are separate native plugin registrations from one source repository. Search
+Target: one installable plugin and one UI entry covering all implemented capabilities.
+The current component directories are experimental; unified lifecycle is not yet qualified. Search
 and extraction are implemented in `plugins/web/omniroute`; optional media modules
 are future work.
 
@@ -33,3 +34,9 @@ Hermes secret/configuration interface. The model module has no bundled gateway
 URL. Image and web modules require their own explicit HTTPS base_url settings;
 see the module configuration examples. No private deployment identity belongs
 in this repository.
+
+## Status
+
+Architecture gate: prove single-entry native model/backend discovery, enablement,
+update and uninstall with profile isolation before deployment. See docs/design.md.
+Passing web contract tests do not establish that gate.
