@@ -10,6 +10,9 @@
 
 ## Unreleased
 
+- Use gateway-selected search and fetch pools in the configuration example;
+  verify both requests omit upstream provider selection when overrides are unset.
+
 - Declare the shared GitHub homepage in both native manifests. Hermes v0.23.1
   accepts this metadata but does not render it on user-plugin cards.
 
