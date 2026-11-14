@@ -50,9 +50,14 @@ The gateway key must permit models `search` and `web-fetch`, endpoint categories
 key restrictions and privacy settings. Plugin enablement stays in local profile
 config; managed list leaves replace the user's entire list.
 
-Install web source under ~/.hermes/plugins/web/omniroute, then native
-`hermes plugins enable web/omniroute`. Model-provider and image plugin locations
-remain unchanged. New modules do not replace existing registrations.
+## Native compatibility result
+
+A normal native install of a disposable combined fixture reproduces the missing
+backend registration in both execution modes on Hermes v0.23.1. See the
+[reproduction and proposed core extension](native-model-backend-proposal.md).
+The single-install architecture requires that native support before pilot
+activation. The three existing component manifests are development fixtures.
+Their separate install commands are not the final rollout procedure.
 
 Before activation, retain owner-private original config and permission fields.
 Rollback restores only changed web settings and native plugin selection, and

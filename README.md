@@ -39,4 +39,7 @@ in this repository.
 
 Architecture gate: prove single-entry native model/backend discovery, enablement,
 update and uninstall with profile isolation before deployment. See docs/design.md.
-Passing web contract tests do not establish that gate.
+Native install reproduces the model/backend lifecycle gap on Hermes v0.23.1 in
+both execution modes. See [the compatibility reproduction and local upstream
+proposal](docs/native-model-backend-proposal.md). No supported single-entry pilot
+has been deployed. The offline suite now contains 23 model/web contract tests.
