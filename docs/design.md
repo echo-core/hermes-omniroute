@@ -1,7 +1,7 @@
 # Design and rollout
 
-One maintained repository, separate native registrations. Model and image source
-are initially preserved exactly from the accepted deployment. The web module uses
+One maintained repository, separate native registrations. Model and image modules
+build on existing native integrations, with deployment-specific URLs removed. The web module uses
 the native WebSearchProvider contract and Hermes's profile-aware provider_env.
 
 The web module registers no media/model providers. It requires an explicit trusted

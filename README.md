@@ -3,7 +3,7 @@
 Native Hermes plugins maintained together for chat/model discovery, Regular/Complex
 images, and web search/extraction through a scoped OmniRoute gateway.
 
-The initial commit preserves the deployed model and image source unchanged.
+The model and image modules are based on working native Hermes integrations.
 These are separate native plugin registrations from one source repository. Search
 and extraction are implemented in `plugins/web/omniroute`; optional media modules
 are future work.
@@ -24,4 +24,12 @@ Compatibility baseline: official Hermes v0.23.1 and OmniRoute 3.8.54 next.
 Run `python -m unittest discover -s tests -v` with requests installed (already a
 Hermes core dependency). Tests are offline and require no credentials.
 See [design and rollout](docs/design.md) for configuration, isolation, acceptance
-and rollback. Model and image source remain unchanged in this release.
+and rollback. Gateway URLs and credentials are configured per profile.
+
+## Gateway configuration
+
+Set `OMNIROUTE_API_KEY` and `OMNIROUTE_BASE_URL` through the selected profile’s
+Hermes secret/configuration interface. The model module has no bundled gateway
+URL. Image and web modules require their own explicit HTTPS base_url settings;
+see the module configuration examples. No private deployment identity belongs
+in this repository.

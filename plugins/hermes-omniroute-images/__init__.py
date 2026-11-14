@@ -66,7 +66,7 @@ class OmniRouteImages(ImageGenProvider):
             return fail("Image mode must be regular or complex.", "invalid_argument")
         base_url = str(cfg.get("base_url", "")).rstrip("/")
         url = urlsplit(base_url)
-        if url.scheme != "https" or not url.hostname or not url.path.endswith("/v1") or url.username or url.query or url.fragment:
+        if url.scheme != "https" or not url.hostname or not url.path.endswith("/v1") or url.username or url.password or url.query or url.fragment:
             return fail("The configured OmniRoute image endpoint is invalid.", "configuration_error")
         key = get_secret(cfg.get("key_env", "OMNIROUTE_API_KEY"))
         if not key:
