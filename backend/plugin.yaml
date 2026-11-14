@@ -1,0 +1,13 @@
+name: hermes-omniroute-backend
+version: 0.2.0
+kind: backend
+author: echo-core
+description: Regular and Complex images, web search and extraction through OmniRoute.
+provides_tools:
+  - image_generate_complex
+provides_web_providers:
+  - omniroute
+requires_env:
+  - name: OMNIROUTE_API_KEY
+    description: This profile's OmniRoute gateway key
+    secret: true

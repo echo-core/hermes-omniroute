@@ -1,45 +1,36 @@
 # Hermes OmniRoute integrations
 
-Native Hermes plugins maintained together for chat/model discovery, Regular/Complex
-images, and web search/extraction through a scoped OmniRoute gateway.
+Two native Hermes plugins route models, Regular/Complex image generation, web
+search and Markdown extraction through a profile's OmniRoute gateway.
 
-The model and image modules are based on working native Hermes integrations.
-Target: one installable plugin and one UI entry covering all implemented capabilities.
-The current component directories are experimental; unified lifecycle is not yet qualified. Search
-and extraction are implemented in `plugins/web/omniroute`; optional media modules
-are future work.
+| Plugin | Source | Capabilities |
+| --- | --- | --- |
+| hermes-omniroute-provider | model-provider/ | Named provider, native chat transport/catalog, dynamic context lookup, auxiliary auto/fast |
+| hermes-omniroute-backend | backend/ | Regular/Complex images, web_search and web_extract |
 
-## Development boundaries
+Video and additional media adapters can be added to the backend after implementation
+and verification. Microsoft/local voice selections are independent of installation.
 
-- Credentials remain in each profile’s Hermes secret store; never commit them.
-- Use native Hermes provider APIs, plugin lifecycle and configuration.
-- Keep capability selection local per profile; managed plugin lists replace user lists.
-- Start with one selected profile; additional profiles require separate rollout.
-- Preserve existing model context discovery, image tools and Microsoft/local voice.
-- Run free contract tests before rollout; paid provider tests require an explicit budget.
+## Install
 
-Compatibility baseline: official Hermes v0.23.1 and OmniRoute 3.8.54 next.
+```sh
+hermes plugins install echo-core/hermes-omniroute#model-provider
+hermes plugins install echo-core/hermes-omniroute#backend
+```
 
-## Tests and rollout
+Use native enablement for both installed plugins in the selected profile. Keep
+plugin selections local per profile. See [configuration and rollout](docs/design.md).
+The repository is private; native Git access is required for installation/updates.
 
-Run `python -m unittest discover -s tests -v` with requests installed (already a
-Hermes core dependency). Tests are offline and require no credentials.
-See [design and rollout](docs/design.md) for configuration, isolation, acceptance
-and rollback. Gateway URLs and credentials are configured per profile.
+Credentials belong in the selected profile's Hermes secret store. Configure an
+explicit gateway URL and preserve existing gateway key restrictions. No gateway
+URL, provider credential or deployment identity is bundled.
 
-## Gateway configuration
+## Tests
 
-Set `OMNIROUTE_API_KEY` and `OMNIROUTE_BASE_URL` through the selected profile’s
-Hermes secret/configuration interface. The model module has no bundled gateway
-URL. Image and web modules require their own explicit HTTPS base_url settings;
-see the module configuration examples. No private deployment identity belongs
-in this repository.
+Run `python -m unittest discover -s tests -v` for offline contract tests with
+requests installed. Native integration checks require Hermes's managed runtime.
+See [the unified-plugin compatibility reproduction](docs/native-model-backend-proposal.md)
+for the current upstream limitation and proposed future consolidation.
 
-## Status
-
-Architecture gate: prove single-entry native model/backend discovery, enablement,
-update and uninstall with profile isolation before deployment. See docs/design.md.
-Native install reproduces the model/backend lifecycle gap on Hermes v0.23.1 in
-both execution modes. See [the compatibility reproduction and local upstream
-proposal](docs/native-model-backend-proposal.md). No supported single-entry pilot
-has been deployed. The offline suite now contains 23 model/web contract tests.
+Compatibility baseline is official Hermes v0.23.1 and OmniRoute 3.8.54 next.

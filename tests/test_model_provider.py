@@ -37,7 +37,7 @@ class ModelContracts(unittest.TestCase):
         self.modules.start()
         self.addCleanup(self.modules.stop)
         spec = importlib.util.spec_from_file_location(
-            "model_fixture", ROOT / "plugins/model-providers/hermes-omniroute-provider/__init__.py")
+            "model_fixture", ROOT / "model-provider/__init__.py")
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         self.profile = self.registration.call_args.args[0]
