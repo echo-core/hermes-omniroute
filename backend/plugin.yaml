@@ -2,6 +2,7 @@ name: hermes-omniroute-backend
 version: 0.2.1
 kind: backend
 author: echo-core
+homepage: https://github.com/echo-core/hermes-omniroute
 description: Regular and Complex images, web search and extraction through OmniRoute.
 provides_tools:
   - image_generate_complex

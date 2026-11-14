@@ -10,6 +10,9 @@
 
 ## Unreleased
 
+- Declare the shared GitHub homepage in both native manifests. Hermes v0.23.1
+  accepts this metadata but does not render it on user-plugin cards.
+
 - Added a native-install reproduction of the model/backend lifecycle gap.
 - Documented a proposed upstream model export under one backend identity.
 - Fixed generic context lookup to resolve the configured endpoint and current
