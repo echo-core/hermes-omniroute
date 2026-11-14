@@ -1,33 +1,48 @@
 """Offline wire/security contracts; no Hermes installation or network required."""
+
 import importlib.util
 import os
-from pathlib import Path
 import sys
 import types
 import unittest
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 import requests
 
 ROOT = Path(__file__).resolve().parents[1]
 common = types.ModuleType("agent.web_search_provider")
+
+
 class Base:
-    def supports_search(self): return True
-    def supports_extract(self): return self.EXTRACT
+    def supports_search(self):
+        return True
+
+    def supports_extract(self):
+        return self.EXTRACT
+
+
 common.WebSearchProvider = Base
 common.get_provider_env = lambda name: "test-profile-key"
 ssl = types.ModuleType("agent.ssl_verify")
 ssl.requests_verify = lambda: True
 config = types.ModuleType("hermes_cli.config")
-settings = {"base_url": "https://gateway.example/v1", "search_provider": "keenable",
-            "fetch_provider": "keenable-search"}
+settings = {
+    "base_url": "https://gateway.example/v1",
+    "search_provider": "keenable",
+    "fetch_provider": "keenable-search",
+}
 config.load_config_readonly = lambda: {"web": {"omniroute": settings}}
-for name, module in [("agent.web_search_provider", common), ("agent.ssl_verify", ssl),
-                     ("hermes_cli.config", config)]:
+for name, module in [
+    ("agent.web_search_provider", common),
+    ("agent.ssl_verify", ssl),
+    ("hermes_cli.config", config),
+]:
     sys.modules[name] = module
 spec = importlib.util.spec_from_file_location("web_candidate", ROOT / "backend/web.py")
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
+
 
 class WebContracts(unittest.TestCase):
     def setUp(self):
@@ -39,30 +54,46 @@ class WebContracts(unittest.TestCase):
         self.addCleanup(self.transport.stop)
 
     def test_search_wire_contract_and_result_normalization(self):
-        self.response.json.return_value = {"provider": "keenable-search", "results": [
-            {"url": "https://docs.example/page", "title": "Docs", "snippet": "x" * 900},
-            {"url": "javascript:alert(1)"}, None]}
+        self.response.json.return_value = {
+            "provider": "keenable-search",
+            "results": [
+                {"url": "https://docs.example/page", "title": "Docs", "snippet": "x" * 900},
+                {"url": "javascript:alert(1)"},
+                None,
+            ],
+        }
         result = self.provider.search(" public query ", 3)
         args, kw = self.post.call_args
         self.assertEqual(args[0], "https://gateway.example/v1/search")
-        self.assertEqual(kw["json"], {"query": "public query", "max_results": 3, "provider": "keenable"})
+        self.assertEqual(
+            kw["json"], {"query": "public query", "max_results": 3, "provider": "keenable"}
+        )
         self.assertEqual(len(result["data"]["web"]), 1)
         self.assertEqual(len(result["data"]["web"][0]["description"]), 500)
         self.assertFalse(kw["allow_redirects"])
 
     def test_search_leaves_provider_selection_to_gateway(self):
         self.response.json.return_value = {"provider": "brave-search", "results": []}
-        with patch.object(module, "_settings", return_value={"base_url": "https://gateway.example/v1"}):
+        with patch.object(
+            module, "_settings", return_value={"base_url": "https://gateway.example/v1"}
+        ):
             result = self.provider.search("query", 3)
         self.assertEqual(self.post.call_args.kwargs["json"], {"query": "query", "max_results": 3})
         self.assertEqual(result["provider"], "brave-search")
 
     def test_extract_leaves_provider_selection_to_gateway(self):
-        self.response.json.return_value = {"provider": "tavily-search", "content": "Gateway-selected content"}
-        with patch.object(module, "_settings", return_value={"base_url": "https://gateway.example/v1"}):
+        self.response.json.return_value = {
+            "provider": "tavily-search",
+            "content": "Gateway-selected content",
+        }
+        with patch.object(
+            module, "_settings", return_value={"base_url": "https://gateway.example/v1"}
+        ):
             result = self.provider.extract(["https://docs.example/page"])[0]
-        self.assertEqual(self.post.call_args.kwargs["json"], {
-            "url": "https://docs.example/page", "format": "markdown", "include_metadata": True})
+        self.assertEqual(
+            self.post.call_args.kwargs["json"],
+            {"url": "https://docs.example/page", "format": "markdown", "include_metadata": True},
+        )
         self.assertEqual(result["metadata"]["provider"], "tavily-search")
 
     def test_search_count_is_clamped(self):
@@ -81,7 +112,10 @@ class WebContracts(unittest.TestCase):
         self.assertEqual(auth, ["Bearer profile-a", "Bearer profile-b"])
 
     def test_scoped_miss_never_uses_process_key(self):
-        with patch.dict(os.environ, {"OMNIROUTE_API_KEY": "launch-key"}), patch.object(module, "provider_env", return_value=""):
+        with (
+            patch.dict(os.environ, {"OMNIROUTE_API_KEY": "launch-key"}),  # pragma: allowlist secret
+            patch.object(module, "provider_env", return_value=""),
+        ):
             result = self.provider.search("query")
         self.assertFalse(result["success"])
         self.post.assert_not_called()
@@ -93,14 +127,23 @@ class WebContracts(unittest.TestCase):
         self.post.assert_not_called()
 
     def test_config_provider_is_not_import_time_global(self):
-        with patch.object(module, "_settings", return_value={**settings, "search_provider": "other-search"}):
+        with patch.object(
+            module, "_settings", return_value={**settings, "search_provider": "other-search"}
+        ):
             self.provider.search("query")
         self.assertEqual(self.post.call_args.kwargs["json"]["provider"], "other-search")
 
     def test_unsafe_gateway_urls_do_not_dispatch(self):
-        for base in ["http://gateway.example/v1", "https://u:p@gateway.example/v1",
-                     "https://gateway.example/v1?token=secret", "https://gateway.example"]:
-            with self.subTest(base=base), patch.object(module, "_settings", return_value={"base_url": base}):
+        for base in [
+            "http://gateway.example/v1",
+            "https://u:p@gateway.example/v1",
+            "https://gateway.example/v1?token=secret",
+            "https://gateway.example",
+        ]:
+            with (
+                self.subTest(base=base),
+                patch.object(module, "_settings", return_value={"base_url": base}),
+            ):
                 self.assertFalse(self.provider.search("query")["success"])
         self.post.assert_not_called()
 
@@ -124,19 +167,30 @@ class WebContracts(unittest.TestCase):
         self.response.close.assert_called_once()
 
     def test_extract_wire_contract_and_truncation_metadata(self):
-        self.response.json.return_value = {"provider": "keenable-search", "content": "Markdown body",
-                                           "metadata": {"title": "Docs", "truncated": True}}
+        self.response.json.return_value = {
+            "provider": "keenable-search",
+            "content": "Markdown body",
+            "metadata": {"title": "Docs", "truncated": True},
+        }
         result = self.provider.extract(["https://docs.example/page"])[0]
         self.assertEqual(result["content"], result["raw_content"])
         self.assertTrue(result["metadata"]["truncated"])
         self.assertEqual(result["title"], "Docs")
         self.assertEqual(self.post.call_args.args[0], "https://gateway.example/v1/web/fetch")
-        self.assertEqual(self.post.call_args.kwargs["json"], {"url": "https://docs.example/page",
-                         "provider": "keenable-search", "format": "markdown", "include_metadata": True})
+        self.assertEqual(
+            self.post.call_args.kwargs["json"],
+            {
+                "url": "https://docs.example/page",
+                "provider": "keenable-search",
+                "format": "markdown",
+                "include_metadata": True,
+            },
+        )
 
     def test_extract_preserves_final_url_for_native_redirect_safety(self):
         self.response.json.return_value = {
-            "url": "http://127.0.0.1/private-fixture", "content": "Redirected fixture",
+            "url": "http://127.0.0.1/private-fixture",
+            "content": "Redirected fixture",
             "metadata": {"sourceURL": "https://unrelated.example", "title": "Redirect"},
         }
         result = self.provider.extract(["https://docs.example/requested"])[0]
@@ -174,6 +228,7 @@ class WebContracts(unittest.TestCase):
         self.assertEqual(len(results), 21)
         self.assertTrue(all("error" in r for r in results))
         self.post.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

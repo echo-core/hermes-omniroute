@@ -26,6 +26,11 @@ Credentials belong in the selected profile's Hermes secret store. Configure an
 explicit gateway URL and preserve existing gateway key restrictions. No gateway
 URL, provider credential or deployment identity is bundled.
 
+## Development
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the frozen development environment,
+prek checks, Conventional Commits and branch/PR workflow.
+
 ## Tests
 
 Run `python -m pytest -q tests` for all offline model/image/web contract tests
