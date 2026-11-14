@@ -15,3 +15,10 @@
 - Fixed generic context lookup to resolve the configured endpoint and current
   profile's key. Declared the endpoint variable separately from API key aliases.
 - Added seven offline model regressions. All 23 offline model/web tests pass.
+
+## 0.2.0
+
+- Package a model provider and a combined image/web backend as two native plugins.
+- Preserve Regular/Complex image roles and native tool names while adding gateway
+  search and extraction in the backend.
+- Keep a shared identity as a future upstream integration target.

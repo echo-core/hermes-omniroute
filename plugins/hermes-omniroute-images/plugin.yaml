@@ -1,9 +1,0 @@
-name: hermes-omniroute-images
-version: 0.1.0
-description: Regular and Complex Codex images through the existing OmniRoute gateway.
-author: echo-core
-kind: backend
-provides_tools:
-  - image_generate_complex
-requires_env:
-  - OMNIROUTE_API_KEY

@@ -25,7 +25,7 @@ config.load_config_readonly = lambda: {"web": {"omniroute": settings}}
 for name, module in [("agent.web_search_provider", common), ("agent.ssl_verify", ssl),
                      ("hermes_cli.config", config)]:
     sys.modules[name] = module
-spec = importlib.util.spec_from_file_location("web_candidate", ROOT / "plugins/web/omniroute/provider.py")
+spec = importlib.util.spec_from_file_location("web_candidate", ROOT / "backend/web.py")
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 

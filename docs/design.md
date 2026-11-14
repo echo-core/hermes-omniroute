@@ -1,40 +1,32 @@
 # Design and rollout
 
-## Required user experience
+## Approved architecture
 
-One native installation, one plugin entry in the Hermes UI, one update/uninstall
-lifecycle, and all implemented capabilities inside that plugin. Internal Python
-modules are fine; separately installed plugin components are not the target.
-Enablement and capability selection must remain profile-scoped. Preserve native
-model discovery/context handling and image behavior without runtime monkeypatches,
-process-global model registration, hidden orphan components or UI filtering tricks.
-Repository source, documentation and history must remain deployment-neutral.
+One repository contains two native plugin packages. The model-provider package
+uses Hermes's model loader. The backend package registers image generation,
+the explicit Complex image tool, and web search/extraction through PluginContext.
+Each package has one manifest and one native update/uninstall lifecycle. Internal
+backend modules share its installed identity and profile scope.
 
-## Architecture gate — unresolved
+A single combined identity remains a future target tracked in
+[Hermes155799](https://github.com/NousResearch/hermes-agent/issues/155799).
+[Native compatibility evidence](native-model-backend-proposal.md) explains the
+separate loaders on v0.23.1. The approved two-plugin deployment uses those loaders.
 
-The current directory layout contains experimental components, not the accepted
-installation design. Installed Hermes separates model-provider discovery from the
-backend PluginContext; no register_model_provider method was found in the inspected
-context API. A combined registration must be proven through supported lifecycle
-interfaces and profile-isolation tests before further deployment. Do not substitute
-a two-entry installation for this requirement. If an upstream extension is needed,
-identify it explicitly before changing Hermes or promising single-entry support.
-
-The model and image modules build on existing native integrations, with deployment-
-specific URLs removed. The web module uses the native WebSearchProvider contract
-and Hermes's profile-aware credential lookup. Existing tests qualify web wire
-behavior only, not single-entry integration or lifecycle acceptance.
-
-The web module registers no media/model providers. It requires an explicit trusted
-HTTPS gateway URL, refuses redirects and does not retry POSTs. No public gateway
-or provider credential is bundled. Provider choices are read per call from scoped
-config, never process-global import-time defaults. Hermes core owns URL safety,
-extraction truncation, tool policy and result processing. Extraction is Markdown;
-deep crawl, browser automation and screenshots are not implemented.
-
-## Example profile configuration
+## Profile configuration
 
 ```yaml
+model:
+  provider: omniroute
+  default: auto
+  base_url: https://YOUR-GATEWAY/v1
+  api_mode: chat_completions
+image_gen:
+  provider: omniroute-images
+  omniroute-images:
+    base_url: https://YOUR-GATEWAY/v1
+    regular_model: codex/gpt-image-2.5-flare
+    complex_model: codex/gpt-image-2.5-sunburst
 web:
   search_backend: omniroute
   extract_backend: omniroute
@@ -44,32 +36,49 @@ web:
     fetch_provider: keenable-search
 ```
 
-Use the profile's existing OMNIROUTE_API_KEY through Hermes secret management.
-The gateway key must permit models `search` and `web-fetch`, endpoint categories
-`search` and `web-fetch`, and the selected provider connection. Preserve unrelated
-key restrictions and privacy settings. Plugin enablement stays in local profile
-config; managed list leaves replace the user's entire list.
+Set OMNIROUTE_API_KEY through the current profile's Hermes secret management.
+OMNIROUTE_BASE_URL can supply the model endpoint when it is not explicitly
+configured. The model adapter resolves context using the profile's endpoint and
+key on each lookup. Keep automatic context discovery and existing auto/* routes.
+The gateway owns Auto routing.
 
-## Native compatibility result
+The gateway key must allow the selected models/endpoints/connections. Search
+requires search capability and /v1/search endpoint access. Extraction additionally
+requires web-fetch capability and /v1/web/fetch endpoint access. Change only the
+selected profile's key permissions and preserve privacy/routing policies.
 
-A normal native install of a disposable combined fixture reproduces the missing
-backend registration in both execution modes on Hermes v0.23.1. See the
-[reproduction and proposed core extension](native-model-backend-proposal.md).
-The single-install architecture requires that native support before pilot
-activation. The three existing component manifests are development fixtures.
-Their separate install commands are not the final rollout procedure.
+Web configuration is read per operation. The adapter refuses redirects, requires
+an explicit trusted HTTPS gateway ending in /v1 and does not retry POSTs. Core
+owns URL safety and extraction postprocessing. Deep crawl and screenshot support
+are outside the implemented web contract.
 
-Before activation, retain owner-private original config and permission fields.
-Rollback restores only changed web settings and native plugin selection, and
-removes only appended key permissions after checking concurrent edits. Do not
-restore whole configs over unrelated user changes. No direct credential deletion
-until acceptance and explicit credential-retirement approval.
+## Migration and rollback
+
+Validate/install both packages using native Hermes management. During replacement,
+disable the legacy image plugin before enabling the backend, so the Complex tool
+and image backend have one owner. Keep the existing image provider name and role
+settings. Disable the old standalone web draft if present. Replace the old model
+plugin through native lifecycle operations. Inspect both inventory entries and
+real native tool availability after reload.
+
+Retain owner-private scoped rollback state until acceptance. Restore only changed
+selections/settings and the original plugin revision on failure. Revert only
+newly appended key permissions after checking for concurrent edits. Existing
+sessions, provider credentials and unrelated plugin selections stay owned by their
+profile. Managed plugin list leaves replace local lists, so use local selections.
 
 ## Acceptance
 
-Offline tests exercise wire contracts, failures, redirects and credential scope.
-Live pilot uses native Hermes web_search/web_extract with public content and
-checks selected backend and provider provenance. Multiple URLs, partial failure,
-private URL rejection and successful fresh-chat behavior are separate gates.
-No paid image/voice/model test is implied. Existing image behavior is preserved
-source, not newly live-tested merely because it is in this repository.
+- Both native package installs validate and appear in management inventory.
+- Two disposable profiles use separate keys and scoped registrations. Exercise
+  native reload, disable/re-enable, update and remove with coherent cleanup.
+- Model identity, Auto catalog and dynamic context preserve existing behavior.
+- Regular/Complex generation, multipart references, deadline and error/fallback
+  handling pass fixture tests. Check native attachment display/download separately.
+- Native web_search routes to /v1/search and web_extract to /v1/web/fetch. Public
+  result content and provider provenance must match. Explicit backend selection
+  must return errors without silently using a direct provider on gateway failure.
+- Native URL policy rejects private targets before extract dispatch. Verify batch
+  order, partial failures and truncation through normal Hermes tool entry points.
+- Fresh-chat acceptance is distinct from endpoint/fixture tests. Paid provider
+  tests require an explicit budget. Preserve existing voice selections.
