@@ -28,8 +28,9 @@ URL, provider credential or deployment identity is bundled.
 
 ## Tests
 
-Run `python -m unittest discover -s tests -v` for offline contract tests with
-requests installed. Native integration checks require Hermes's managed runtime.
+Run `python -m pytest -q tests` for all offline model/image/web contract tests
+with pytest and requests installed. The unittest subset can also run with
+`python -m unittest discover -s tests -v`. Native integration checks require Hermes's managed runtime.
 See [the unified-plugin compatibility reproduction](docs/native-model-backend-proposal.md)
 for the current upstream limitation and proposed future consolidation.
 

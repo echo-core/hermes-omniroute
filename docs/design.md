@@ -67,6 +67,25 @@ newly appended key permissions after checking for concurrent edits. Existing
 sessions, provider credentials and unrelated plugin selections stay owned by their
 profile. Managed plugin list leaves replace local lists, so use local selections.
 
+## Native lifecycle verification
+
+The two-package test in tests/native_pair_probe.py passes installation, scoped
+registrations, backend disable/re-enable, native update and removal under both
+in-process and host isolation on v0.23.1. Native search/extract fixtures also verify
+scoped keys, denied gateway responses and private-URL rejection in-process.
+
+The running model registry can retain a disabled/removed provider on this build.
+The test records that observation and verifies model removal again in a fresh
+native process. Restart the owning runtime after model-provider replacement or
+removal. This is a native core cache limitation; the backend's owned registrations
+unload in-process. Full warm/cold catalog and context-cache isolation is a separate
+gate from asserting per-profile request arguments.
+
+When selecting the gateway route, set native web.keyless_rescue to false to prevent
+core's default free-provider rescue from sending a failed gateway request directly
+to another search/extract provider. Managed web route pins require administrator
+configuration; a local selection cannot override those leaves.
+
 ## Acceptance
 
 - Both native package installs validate and appear in management inventory.
