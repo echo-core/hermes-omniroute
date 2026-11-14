@@ -119,6 +119,22 @@ class WebContracts(unittest.TestCase):
         self.assertEqual(self.post.call_args.kwargs["json"], {"url": "https://docs.example/page",
                          "provider": "keenable-search", "format": "markdown", "include_metadata": True})
 
+    def test_extract_preserves_final_url_for_native_redirect_safety(self):
+        self.response.json.return_value = {
+            "url": "http://127.0.0.1/private-fixture", "content": "Redirected fixture",
+            "metadata": {"sourceURL": "https://unrelated.example", "title": "Redirect"},
+        }
+        result = self.provider.extract(["https://docs.example/requested"])[0]
+        self.assertEqual(result["url"], "http://127.0.0.1/private-fixture")
+        self.assertEqual(result["metadata"]["sourceURL"], "https://docs.example/requested")
+
+    def test_extract_rejects_non_web_final_url(self):
+        self.response.json.return_value = {"url": "file:///private-fixture", "content": "Fixture"}
+        result = self.provider.extract(["https://docs.example/requested"])[0]
+        self.assertIn("error", result)
+        self.assertEqual(result["url"], "https://docs.example/requested")
+        self.assertNotIn("Fixture", result["content"])
+
     def test_extract_batch_preserves_partial_failure_and_order(self):
         one = Mock(status_code=403)
         two = Mock(status_code=200)

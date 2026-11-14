@@ -149,9 +149,13 @@ class OmniRouteWebProvider(WebSearchProvider):
                 content = body.get("content")
                 if not isinstance(content, str) or not content.strip():
                     raise GatewayError("OmniRoute returned no extractable content")
+                final_url = body.get("url") or url
+                if not isinstance(final_url, str) or urlsplit(final_url).scheme not in ("http", "https"):
+                    raise GatewayError("OmniRoute returned an invalid page URL")
                 metadata = dict(body["metadata"]) if isinstance(body.get("metadata"), dict) else {}
+                metadata["sourceURL"] = url
                 metadata["provider"] = body.get("provider")
-                results.append({"url": url, "title": str(metadata.get("title") or ""),
+                results.append({"url": final_url, "title": str(metadata.get("title") or ""),
                                 "content": content, "raw_content": content, "metadata": metadata})
             except GatewayError as exc:
                 results.append(self._error(url, str(exc)))
