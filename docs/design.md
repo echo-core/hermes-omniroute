@@ -1,8 +1,29 @@
 # Design and rollout
 
-One maintained repository, separate native registrations. Model and image modules
-build on existing native integrations, with deployment-specific URLs removed. The web module uses
-the native WebSearchProvider contract and Hermes's profile-aware provider_env.
+## Required user experience
+
+One native installation, one plugin entry in the Hermes UI, one update/uninstall
+lifecycle, and all implemented capabilities inside that plugin. Internal Python
+modules are fine; separately installed plugin components are not the target.
+Enablement and capability selection must remain profile-scoped. Preserve native
+model discovery/context handling and image behavior without runtime monkeypatches,
+process-global model registration, hidden orphan components or UI filtering tricks.
+Repository source, documentation and history must remain deployment-neutral.
+
+## Architecture gate — unresolved
+
+The current directory layout contains experimental components, not the accepted
+installation design. Installed Hermes separates model-provider discovery from the
+backend PluginContext; no register_model_provider method was found in the inspected
+context API. A combined registration must be proven through supported lifecycle
+interfaces and profile-isolation tests before further deployment. Do not substitute
+a two-entry installation for this requirement. If an upstream extension is needed,
+identify it explicitly before changing Hermes or promising single-entry support.
+
+The model and image modules build on existing native integrations, with deployment-
+specific URLs removed. The web module uses the native WebSearchProvider contract
+and Hermes's profile-aware credential lookup. Existing tests qualify web wire
+behavior only, not single-entry integration or lifecycle acceptance.
 
 The web module registers no media/model providers. It requires an explicit trusted
 HTTPS gateway URL, refuses redirects and does not retry POSTs. No public gateway
