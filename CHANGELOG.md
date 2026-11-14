@@ -22,3 +22,6 @@
 - Preserve Regular/Complex image roles and native tool names while adding gateway
   search and extraction in the backend.
 - Keep a shared identity as a future upstream integration target.
+
+- Native two-profile lifecycle passes in both execution modes. Model cache cleanup
+  is verified after a fresh process. In-process web fixtures cover errors and SSRF.
