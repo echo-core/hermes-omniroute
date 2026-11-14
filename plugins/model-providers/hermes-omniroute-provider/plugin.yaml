@@ -1,0 +1,4 @@
+name: hermes-omniroute-provider
+kind: model-provider
+version: 0.1.1
+description: Native OmniRoute provider identity and live gateway catalog.
