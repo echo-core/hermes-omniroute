@@ -1,4 +1,5 @@
 """Declarative Hermes provider; transport and catalog fetching stay upstream-native."""
+
 from urllib.parse import urlsplit
 
 from providers import register_provider
@@ -14,11 +15,24 @@ class OmniRouteProfile(ProviderProfile):
         config = load_config_readonly()
         provider_config = config.get("providers", {}).get(self.name, {})
         model_config = config.get("model", {})
-        model_url = model_config.get("base_url", "") if model_config.get("provider") == self.name else ""
-        base_url = str(provider_config.get("api") or model_url or get_provider_env("OMNIROUTE_BASE_URL")).strip().rstrip("/")
+        model_url = (
+            model_config.get("base_url", "") if model_config.get("provider") == self.name else ""
+        )
+        base_url = (
+            str(provider_config.get("api") or model_url or get_provider_env("OMNIROUTE_BASE_URL"))
+            .strip()
+            .rstrip("/")
+        )
         url = urlsplit(base_url)
-        if (url.scheme != "https" or not url.hostname or not url.path.endswith("/v1")
-                or url.username or url.password or url.query or url.fragment):
+        if (
+            url.scheme != "https"
+            or not url.hostname
+            or not url.path.endswith("/v1")
+            or url.username
+            or url.password
+            or url.query
+            or url.fragment
+        ):
             raise ValueError("Configure a trusted OmniRoute HTTPS endpoint ending in /v1")
         key = get_provider_env("OMNIROUTE_API_KEY")
         if not key:
@@ -26,16 +40,18 @@ class OmniRouteProfile(ProviderProfile):
         return _resolve_custom_endpoint_context_length(model, base_url, key, self.name)
 
 
-register_provider(OmniRouteProfile(
-    name="omniroute",
-    display_name="OmniRoute",
-    description="Profile-scoped OmniRoute gateway",
-    env_vars=("OMNIROUTE_API_KEY",),
-    base_url="",
-    base_url_env_var="OMNIROUTE_BASE_URL",
-    auth_type="api_key",
-    api_mode="chat_completions",
-    aggregator=True,
-    fallback_models=(),
-    default_aux_model="auto/fast",
-))
+register_provider(
+    OmniRouteProfile(
+        name="omniroute",
+        display_name="OmniRoute",
+        description="Profile-scoped OmniRoute gateway",
+        env_vars=("OMNIROUTE_API_KEY",),
+        base_url="",
+        base_url_env_var="OMNIROUTE_BASE_URL",
+        auth_type="api_key",
+        api_mode="chat_completions",
+        aggregator=True,
+        fallback_models=(),
+        default_aux_model="auto/fast",
+    )
+)

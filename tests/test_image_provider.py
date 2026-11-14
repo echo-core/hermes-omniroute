@@ -1,8 +1,8 @@
 import importlib.util
 import io
-from pathlib import Path
 import sys
 import types
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -15,15 +15,23 @@ def plugin(monkeypatch):
         value.__dict__.update(values)
         monkeypatch.setitem(sys.modules, name, value)
 
-    module("agent.image_gen_provider", ImageGenProvider=object,
-           error_response=lambda **kw: dict(success=False, **kw),
-           success_response=lambda **kw: dict(success=True, **kw),
-           resolve_aspect_ratio=lambda value: value)
+    module(
+        "agent.image_gen_provider",
+        ImageGenProvider=object,
+        error_response=lambda **kw: dict(success=False, **kw),
+        success_response=lambda **kw: dict(success=True, **kw),
+        resolve_aspect_ratio=lambda value: value,
+    )
     module("agent.secret_scope", get_secret=lambda key: "synthetic-fixture")
-    module("plugins.image_gen._common",
-           collect_source_images=lambda primary, refs, limit: ([primary] if primary else []) + (refs or []),
-           materialize_image=lambda *a, **kw: ("/tmp/synthetic.png", None),
-           record_token_usage=Mock(), size_for=lambda aspect: "1024x1024")
+    module(
+        "plugins.image_gen._common",
+        collect_source_images=lambda primary, refs, limit: (
+            ([primary] if primary else []) + (refs or [])
+        ),
+        materialize_image=lambda *a, **kw: ("/tmp/synthetic.png", None),
+        record_token_usage=Mock(),
+        size_for=lambda aspect: "1024x1024",
+    )
     opened = []
 
     def open_image(ref):
@@ -39,7 +47,9 @@ def plugin(monkeypatch):
     client = Mock()
     client.__enter__ = Mock(return_value=client)
     client.__exit__ = Mock(return_value=False)
-    response = types.SimpleNamespace(data=[types.SimpleNamespace(b64_json="fixture", url=None)], usage=None)
+    response = types.SimpleNamespace(
+        data=[types.SimpleNamespace(b64_json="fixture", url=None)], usage=None
+    )
     client.images.generate.return_value = response
     client.images.edit.return_value = response
     factory = Mock(return_value=client)
@@ -53,7 +63,9 @@ def plugin(monkeypatch):
     return value, client, factory, RateLimitError, cfg, opened
 
 
-@pytest.mark.parametrize("mode,expected", [("regular", "gpt-image-2.5-flare"), ("complex", "gpt-image-2.5-sunburst")])
+@pytest.mark.parametrize(
+    "mode,expected", [("regular", "gpt-image-2.5-flare"), ("complex", "gpt-image-2.5-sunburst")]
+)
 def test_mode_selects_exact_gateway_model(plugin, mode, expected):
     value, client, factory, _, _, _ = plugin
     result = value.OmniRouteImages().generate("Synthetic", mode=mode)

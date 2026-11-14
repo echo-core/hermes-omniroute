@@ -4,17 +4,18 @@ Run with Hermes's managed Python and bootstrap, not the offline test stubs.
 Only disposable profile homes and a local Git fixture are written. No provider
 requests are made. A successful reproduction exits zero and reports supported=false.
 """
-from contextlib import contextmanager
+
 import json
 import os
-from pathlib import Path
 import subprocess
 import tempfile
+from contextlib import contextmanager
+from pathlib import Path
 
 NAME = "omniroute-lifecycle-fixture"
 MODEL = "omniroute-lifecycle-model"
 WEB = "omniroute-lifecycle-web"
-SOURCE = r'''from providers import register_provider
+SOURCE = r"""from providers import register_provider
 from providers.base import ProviderProfile
 
 register_provider(ProviderProfile(
@@ -37,14 +38,26 @@ def register(ctx):
             return {"success": True, "data": {"web": []}}
 
     ctx.register_web_search_provider(FixtureWeb())
-'''
+"""
 
 
 def git(directory, *args):
     subprocess.run(
-        ["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
-         "-c", "commit.gpgsign=false", "-C", str(directory), *args],
-        check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+        [
+            "git",
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "-C",
+            str(directory),
+            *args,
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
     )
 
 
@@ -65,19 +78,17 @@ def main():
             )
         source = root / NAME
         source.mkdir()
-        (source / "plugin.yaml").write_text(
-            f"name: {NAME}\nversion: 0.0.1\nkind: model-provider\n"
-        )
+        (source / "plugin.yaml").write_text(f"name: {NAME}\nversion: 0.0.1\nkind: model-provider\n")
         (source / "__init__.py").write_text(SOURCE)
         git(source, "init", "-q")
         git(source, "add", ".")
         git(source, "commit", "-qm", "Local lifecycle fixture")
 
-        from hermes_constants import set_hermes_home_override, reset_hermes_home_override
-        from agent.secret_scope import set_secret_scope, reset_secret_scope
-        from hermes_cli.plugins_cmd_install import dashboard_install_plugin
-        from hermes_cli.plugins import get_plugin_manager
+        from agent.secret_scope import reset_secret_scope, set_secret_scope
         from agent.web_search_registry import get_provider
+        from hermes_cli.plugins import get_plugin_manager
+        from hermes_cli.plugins_cmd_install import dashboard_install_plugin
+        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
         from providers import get_provider_profile
 
         @contextmanager
@@ -94,7 +105,9 @@ def main():
         with bind(home_a, "fixture-a"):
             installed = dashboard_install_plugin(source.as_uri(), force=False, enable=False)
             if not installed.get("ok"):
-                raise RuntimeError("Native fixture installation failed: " + str(installed.get("error")))
+                raise RuntimeError(
+                    "Native fixture installation failed: " + str(installed.get("error"))
+                )
             result["native_install"] = True
             # Resolve before manager startup, matching early auth/provider discovery.
             result["model_a"] = get_provider_profile(MODEL) is not None
@@ -107,8 +120,11 @@ def main():
             result["model_b"] = get_provider_profile(MODEL) is not None
             result["web_b"] = get_provider(WEB) is not None
         result["supported"] = (
-            result["model_a"] and result["web_a"] and result["inventory_rows"] == 1
-            and not result["model_b"] and not result["web_b"]
+            result["model_a"]
+            and result["web_a"]
+            and result["inventory_rows"] == 1
+            and not result["model_b"]
+            and not result["web_b"]
         )
         # This is a regression reproduction, not acceptance of the failed design.
         assert result["model_a"] and not result["web_a"], result
