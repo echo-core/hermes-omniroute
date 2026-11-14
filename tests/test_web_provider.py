@@ -50,6 +50,21 @@ class WebContracts(unittest.TestCase):
         self.assertEqual(len(result["data"]["web"][0]["description"]), 500)
         self.assertFalse(kw["allow_redirects"])
 
+    def test_search_leaves_provider_selection_to_gateway(self):
+        self.response.json.return_value = {"provider": "brave-search", "results": []}
+        with patch.object(module, "_settings", return_value={"base_url": "https://gateway.example/v1"}):
+            result = self.provider.search("query", 3)
+        self.assertEqual(self.post.call_args.kwargs["json"], {"query": "query", "max_results": 3})
+        self.assertEqual(result["provider"], "brave-search")
+
+    def test_extract_leaves_provider_selection_to_gateway(self):
+        self.response.json.return_value = {"provider": "tavily-search", "content": "Gateway-selected content"}
+        with patch.object(module, "_settings", return_value={"base_url": "https://gateway.example/v1"}):
+            result = self.provider.extract(["https://docs.example/page"])[0]
+        self.assertEqual(self.post.call_args.kwargs["json"], {
+            "url": "https://docs.example/page", "format": "markdown", "include_metadata": True})
+        self.assertEqual(result["metadata"]["provider"], "tavily-search")
+
     def test_search_count_is_clamped(self):
         self.provider.search("query", 500)
         self.assertEqual(self.post.call_args.kwargs["json"]["max_results"], 50)

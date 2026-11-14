@@ -33,15 +33,17 @@ web:
   keyless_rescue: false
   omniroute:
     base_url: https://YOUR-GATEWAY/v1
-    search_provider: keenable
-    fetch_provider: keenable-search
 ```
 
 Set OMNIROUTE_API_KEY through the current profile's Hermes secret management.
 OMNIROUTE_BASE_URL can supply the model endpoint when it is not explicitly
 configured. The model adapter resolves context using the profile's endpoint and
 key on each lookup. Keep automatic context discovery and existing auto/* routes.
-The gateway owns Auto routing.
+The gateway owns Auto routing. Leave `web.omniroute.search_provider` and
+`fetch_provider` unset for normal operation. The adapter then omits `provider`
+from both requests: OmniRoute selects within its configured, key-authorized
+search/fetch pools and applies its own fallback policy. Explicit provider fields
+are optional overrides for a deliberate provider-specific request, not defaults.
 
 The gateway key must allow the selected models/endpoints/connections. Search
 requires search capability and /v1/search endpoint access. Extraction additionally
