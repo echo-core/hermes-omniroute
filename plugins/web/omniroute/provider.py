@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import urlsplit
 
-from plugins.web._common import BaseWebSearchProvider, provider_env
+from agent.web_search_provider import WebSearchProvider, get_provider_env as provider_env
 
 MAX_RESULTS = 50
 MAX_URLS = 20
@@ -35,11 +35,22 @@ class GatewayError(Exception):
     """Credential-free error safe to return to the model."""
 
 
-class OmniRouteWebProvider(BaseWebSearchProvider):
+class OmniRouteWebProvider(WebSearchProvider):
     NAME = "omniroute"
     DISPLAY_NAME = "OmniRoute"
     KEY_ENV = "OMNIROUTE_API_KEY"
     EXTRACT = True
+
+    @property
+    def name(self):
+        return self.NAME
+
+    @property
+    def display_name(self):
+        return self.DISPLAY_NAME
+
+    def supports_extract(self):
+        return True
 
     def is_available(self) -> bool:
         try:

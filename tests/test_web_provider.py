@@ -10,19 +10,19 @@ from unittest.mock import Mock, patch
 import requests
 
 ROOT = Path(__file__).resolve().parents[1]
-common = types.ModuleType("plugins.web._common")
+common = types.ModuleType("agent.web_search_provider")
 class Base:
     def supports_search(self): return True
     def supports_extract(self): return self.EXTRACT
-common.BaseWebSearchProvider = Base
-common.provider_env = lambda name: "test-profile-key"
+common.WebSearchProvider = Base
+common.get_provider_env = lambda name: "test-profile-key"
 ssl = types.ModuleType("agent.ssl_verify")
 ssl.requests_verify = lambda: True
 config = types.ModuleType("hermes_cli.config")
 settings = {"base_url": "https://gateway.example/v1", "search_provider": "keenable",
             "fetch_provider": "keenable-search"}
 config.load_config_readonly = lambda: {"web": {"omniroute": settings}}
-for name, module in [("plugins.web._common", common), ("agent.ssl_verify", ssl),
+for name, module in [("agent.web_search_provider", common), ("agent.ssl_verify", ssl),
                      ("hermes_cli.config", config)]:
     sys.modules[name] = module
 spec = importlib.util.spec_from_file_location("web_candidate", ROOT / "plugins/web/omniroute/provider.py")
