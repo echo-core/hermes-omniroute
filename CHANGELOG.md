@@ -12,7 +12,7 @@
 
 - Add frozen prek hooks, Conventional Commit and protected-branch guards,
   Python lint/format and offline credential checks. Freeze development
-  dependencies with hashes and run the hook/test suite in CI on Python 3.11/3.14.
+  dependencies with hashes and run offline tests through prek before pushing.
 
 - Use gateway-selected search and fetch pools in the configuration example;
   verify both requests omit upstream provider selection when overrides are unset.
