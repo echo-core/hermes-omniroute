@@ -3,23 +3,24 @@
 Requires Hermes's managed Python/bootstrap. All model catalog HTTP is mocked.
 Only disposable profile homes and their native metadata caches are written.
 """
+
 import argparse
-from contextlib import contextmanager
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import textwrap
-from unittest.mock import MagicMock
-from unittest.mock import patch
+from contextlib import contextmanager
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--source", type=Path,
+        "--source",
+        type=Path,
         default=Path(__file__).resolve().parents[1] / "model-provider/__init__.py",
     )
     source_code = parser.parse_args().source.read_text()
@@ -31,15 +32,16 @@ def main():
         os.environ["HERMES_MANAGED_DIR"] = str(managed)
 
         import hermes_constants
-        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
         from agent.secret_scope import reset_secret_scope, set_secret_scope
+        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
         from providers import get_provider_profile
 
         @contextmanager
         def bind(home, key):
             home_token = set_hermes_home_override(home)
             secret_token = set_secret_scope(
-                {"OMNIROUTE_API_KEY": key}, profile_home=str(home),
+                {"OMNIROUTE_API_KEY": key},
+                profile_home=str(home),
             )
             try:
                 yield
@@ -109,11 +111,19 @@ def main():
             output = subprocess.check_output([sys.executable, "-I", "-c", child_code], text=True)
             assert "COLD_CONTEXT_OK" in output
 
-        print("NATIVE_CONTEXT_CACHE " + json.dumps({
-            "sameGateway": True, "distinctKeys": True,
-            "values": list(contexts.values()), "warmScopeSwitches": True,
-            "freshProcessDiskCaches": True, "catalogProbes": len(catalog_calls),
-        }))
+        print(
+            "NATIVE_CONTEXT_CACHE "
+            + json.dumps(
+                {
+                    "sameGateway": True,
+                    "distinctKeys": True,
+                    "values": list(contexts.values()),
+                    "warmScopeSwitches": True,
+                    "freshProcessDiskCaches": True,
+                    "catalogProbes": len(catalog_calls),
+                }
+            )
+        )
 
 
 if __name__ == "__main__":

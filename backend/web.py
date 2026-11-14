@@ -3,12 +3,14 @@
 No provider credentials live here. The existing per-profile OmniRoute key is
 resolved through Hermes's scope-aware provider_env helper for every operation.
 """
+
 from __future__ import annotations
 
 from typing import Any
 from urllib.parse import urlsplit
 
-from agent.web_search_provider import WebSearchProvider, get_provider_env as provider_env
+from agent.web_search_provider import WebSearchProvider
+from agent.web_search_provider import get_provider_env as provider_env
 
 MAX_RESULTS = 50
 MAX_URLS = 20
@@ -17,6 +19,7 @@ SNIPPET_CHARS = 500
 
 def _settings() -> dict:
     from hermes_cli.config import load_config_readonly
+
     web = load_config_readonly().get("web", {})
     settings = web.get("omniroute", {}) if isinstance(web, dict) else {}
     return settings if isinstance(settings, dict) else {}
@@ -25,8 +28,15 @@ def _settings() -> dict:
 def _base_url(settings: dict) -> str:
     value = str(settings.get("base_url", "")).strip().rstrip("/")
     url = urlsplit(value)
-    if (url.scheme != "https" or not url.hostname or url.username or url.password
-            or url.query or url.fragment or not url.path.endswith("/v1")):
+    if (
+        url.scheme != "https"
+        or not url.hostname
+        or url.username
+        or url.password
+        or url.query
+        or url.fragment
+        or not url.path.endswith("/v1")
+    ):
         raise ValueError("Configure web.omniroute.base_url as a trusted HTTPS URL ending in /v1")
     return value
 
@@ -68,16 +78,23 @@ class OmniRouteWebProvider(WebSearchProvider):
             base = _base_url(settings)
             key = provider_env(self.KEY_ENV)
         except Exception:
-            raise GatewayError("OmniRoute configuration or profile credentials unavailable") from None
+            raise GatewayError(
+                "OmniRoute configuration or profile credentials unavailable"
+            ) from None
         if not key:
             raise GatewayError("OMNIROUTE_API_KEY is not configured for this profile")
         try:
             response = requests.post(
-                base + path, json=payload,
-                headers={"Authorization": "Bearer " + key,
-                         "Content-Type": "application/json",
-                         "User-Agent": "echo-core-hermes-omniroute/0.1.0"},
-                timeout=(10, 40), allow_redirects=False, verify=requests_verify(),
+                base + path,
+                json=payload,
+                headers={
+                    "Authorization": "Bearer " + key,
+                    "Content-Type": "application/json",
+                    "User-Agent": "echo-core-hermes-omniroute/0.1.0",
+                },
+                timeout=(10, 40),
+                allow_redirects=False,
+                verify=requests_verify(),
             )
         except requests.Timeout:
             raise GatewayError("OmniRoute request timed out; no retry was submitted") from None
@@ -115,9 +132,16 @@ class OmniRouteWebProvider(WebSearchProvider):
                     continue
                 if urlsplit(row["url"]).scheme not in ("http", "https"):
                     continue
-                web.append({"title": str(row.get("title") or ""), "url": row["url"],
-                            "description": str(row.get("snippet") or row.get("description") or "")[:SNIPPET_CHARS],
-                            "position": len(web) + 1})
+                web.append(
+                    {
+                        "title": str(row.get("title") or ""),
+                        "url": row["url"],
+                        "description": str(row.get("snippet") or row.get("description") or "")[
+                            :SNIPPET_CHARS
+                        ],
+                        "position": len(web) + 1,
+                    }
+                )
                 if len(web) == count:
                     break
             return {"success": True, "data": {"web": web}, "provider": body.get("provider")}
@@ -150,13 +174,23 @@ class OmniRouteWebProvider(WebSearchProvider):
                 if not isinstance(content, str) or not content.strip():
                     raise GatewayError("OmniRoute returned no extractable content")
                 final_url = body.get("url") or url
-                if not isinstance(final_url, str) or urlsplit(final_url).scheme not in ("http", "https"):
+                if not isinstance(final_url, str) or urlsplit(final_url).scheme not in (
+                    "http",
+                    "https",
+                ):
                     raise GatewayError("OmniRoute returned an invalid page URL")
                 metadata = dict(body["metadata"]) if isinstance(body.get("metadata"), dict) else {}
                 metadata["sourceURL"] = url
                 metadata["provider"] = body.get("provider")
-                results.append({"url": final_url, "title": str(metadata.get("title") or ""),
-                                "content": content, "raw_content": content, "metadata": metadata})
+                results.append(
+                    {
+                        "url": final_url,
+                        "title": str(metadata.get("title") or ""),
+                        "content": content,
+                        "raw_content": content,
+                        "metadata": metadata,
+                    }
+                )
             except GatewayError as exc:
                 results.append(self._error(url, str(exc)))
             except (TypeError, ValueError):
