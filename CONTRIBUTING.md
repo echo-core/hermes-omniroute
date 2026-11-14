@@ -37,15 +37,12 @@ Use Conventional Commits, for example `fix(web): preserve extraction redirects` 
 fixup and merge messages. Public issue titles remain plain declarative reports;
 they are not Git commit messages. Existing historical commits are not rewritten.
 
-CI repeats the manual hook suite, including tests, on Python 3.11 and 3.14 and
-validates only the new commits in a pull request. The local branch guard runs on
-commit/push; CI's manual stage intentionally does not treat checking out `main`
-as an attempted direct commit. Required pull requests and passing checks should
-also be enforced in GitHub branch protection when the repository plan permits it.
+The branch guard runs locally on commit/push. Run the manual full check before
+submitting a pull request.
 
 ## Updating frozen tools
 
-All remote hook revisions and GitHub Actions are pinned to full commit SHAs with
+All remote hook revisions are pinned to full commit SHAs with
 release comments. Refresh hooks deliberately on a feature branch:
 
 ```sh
@@ -63,5 +60,5 @@ uv pip compile requirements-dev.in --python-version 3.11 --universal --generate-
 python -m pip install --require-hashes -r requirements-dev.txt
 ```
 
-Keep paid/live provider calls out of the default hooks and CI. Live acceptance
+Keep paid/live provider calls out of the default hooks. Live acceptance
 requires a separate explicit budget and selected-profile authorization.

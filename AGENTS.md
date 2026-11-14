@@ -15,13 +15,13 @@ target once supported upstream. Keep both plugins profile-scoped and prove nativ
 lifecycle and isolation before rollout. Repository files must remain generic;
 deployment identities and hosts belong in external deployment records.
 
-## Repository workflow
+## Repository checks
 
 Work on a feature branch and submit a pull request; never commit or push directly
 to main/master. Use Conventional Commit messages. Read CONTRIBUTING.md and install
-prek before committing. Keep all remote hooks/actions frozen to full commit SHAs;
+prek before committing. Keep all remote hooks frozen to full commit SHAs;
 update them deliberately with prek update --freeze and review the resulting diff.
 Run the manual hook suite and offline tests before pushing. Do not bypass failed
 checks, rewrite published history or change repository visibility without explicit
-user authorization. CI is offline with respect to model/provider APIs. Development
+user authorization. Checks are offline with respect to model/provider APIs. Development
 tooling does not authorize deployment or changes to installed Hermes plugins.
