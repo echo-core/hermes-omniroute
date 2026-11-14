@@ -25,3 +25,10 @@
 
 - Native two-profile lifecycle passes in both execution modes. Model cache cleanup
   is verified after a fresh process. In-process web fixtures cover errors and SSRF.
+
+## 0.2.1 backend
+
+- Preserve the gateway's final page URL for native redirect safety and cache
+  tracking, while binding sourceURL to the requested page.
+- Reject non-web final URLs and include the explicit no-rescue setting in the
+  example configuration.

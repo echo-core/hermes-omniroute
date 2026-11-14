@@ -1,5 +1,5 @@
 name: hermes-omniroute-backend
-version: 0.2.0
+version: 0.2.1
 kind: backend
 author: echo-core
 description: Regular and Complex images, web search and extraction through OmniRoute.

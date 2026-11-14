@@ -30,6 +30,7 @@ image_gen:
 web:
   search_backend: omniroute
   extract_backend: omniroute
+  keyless_rescue: false
   omniroute:
     base_url: https://YOUR-GATEWAY/v1
     search_provider: keenable
@@ -49,7 +50,9 @@ selected profile's key permissions and preserve privacy/routing policies.
 
 Web configuration is read per operation. The adapter refuses redirects, requires
 an explicit trusted HTTPS gateway ending in /v1 and does not retry POSTs. Core
-owns URL safety and extraction postprocessing. Deep crawl and screenshot support
+owns URL safety and extraction postprocessing. Preserve the gateway’s returned
+page URL and requested metadata.sourceURL so core can check redirect targets
+and cache content under the requested URL. Deep crawl and screenshot support
 are outside the implemented web contract.
 
 ## Migration and rollback
@@ -85,6 +88,18 @@ When selecting the gateway route, set native web.keyless_rescue to false to prev
 core's default free-provider rescue from sending a failed gateway request directly
 to another search/extract provider. Managed web route pins require administrator
 configuration; a local selection cannot override those leaves.
+
+## Extraction URL repair in backend 0.2.1
+
+Preserve the gateway's final URL and bind metadata.sourceURL to the requested page.
+The native regression in tests/native_extract_redirect_probe.py proves a private
+redirect target is refused and a public redirect's cached final URL is checked
+again on reuse. The old adapter fails that assertion. Provider HTTP is mocked.
+
+Before reusing extraction cache created by backend 0.2.0, expire entries for this
+provider in the selected profile so responses missing their final-URL provenance
+are fetched again. Other providers' caches and user artifacts are separate from
+this migration. The pilot had only one attributable public acceptance entry.
 
 ## Acceptance
 
