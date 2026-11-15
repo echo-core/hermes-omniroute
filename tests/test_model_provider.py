@@ -59,6 +59,32 @@ class ModelContracts(unittest.TestCase):
         self.assertTrue(self.profile.aggregator)
         self.assertEqual(self.profile.default_aux_model, "auto/fast")
 
+    def test_auxiliary_runtime_gets_configured_endpoint_without_catalog_lookup(self):
+        endpoint = self.profile.runtime_base_url(
+            api_key=self.secrets["OMNIROUTE_API_KEY"], default="", env_url=""
+        )
+        self.assertEqual(endpoint, "https://gateway.example/v1")
+        self.lookup.assert_not_called()
+
+    def test_auxiliary_runtime_follows_current_profile_without_reusing_prior_url(self):
+        self.assertEqual(
+            self.profile.runtime_base_url(
+                api_key=self.secrets["OMNIROUTE_API_KEY"], default="", env_url=""
+            ),
+            "https://gateway.example/v1",
+        )
+        self.config = {
+            "providers": {"omniroute": {"api": "https://second.example/v1/"}},
+            "model": {"provider": "another", "base_url": "https://another.example/v1"},
+        }
+        self.assertEqual(
+            self.profile.runtime_base_url(
+                api_key=self.secrets["OMNIROUTE_API_KEY"], default="", env_url=""
+            ),
+            "https://second.example/v1",
+        )
+        self.lookup.assert_not_called()
+
     def test_configured_endpoint_and_scoped_key_reach_native_context_resolver(self):
         self.assertEqual(self.profile.get_model_context_length("auto"), 65536)
         self.lookup.assert_called_once_with(
@@ -77,6 +103,15 @@ class ModelContracts(unittest.TestCase):
         self.config = {"model": {"provider": "another", "base_url": "https://another.example/v1"}}
         self.profile.get_model_context_length("auto/fast")
         self.assertEqual(self.lookup.call_args.args[1], "https://env.example/v1")
+
+    def test_auxiliary_endpoint_never_uses_another_providers_url(self):
+        self.config = {"model": {"provider": "another", "base_url": "https://another.example/v1"}}
+        self.secrets.pop("OMNIROUTE_BASE_URL")
+        with self.assertRaisesRegex(ValueError, "trusted OmniRoute HTTPS endpoint"):
+            self.profile.runtime_base_url(
+                api_key=self.secrets["OMNIROUTE_API_KEY"], default="", env_url=""
+            )
+        self.lookup.assert_not_called()
 
     def test_same_gateway_uses_each_current_profile_key(self):
         self.lookup.side_effect = [65536, 32768]
