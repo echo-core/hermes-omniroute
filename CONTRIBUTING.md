@@ -51,7 +51,8 @@ need a Hermes runtime and are separate from this offline suite.
 Use Conventional Commits, for example `fix(web): preserve extraction redirects` or
 `test(images): cover regular fallback`. The commit-msg hook rejects unstructured,
 fixup and merge messages. Public issue titles remain plain declarative reports;
-they are not Git commit messages. Existing historical commits are not rewritten.
+they are not Git commit messages. Include a short commit-message body explaining
+what changed and why. Existing historical commits are not rewritten.
 
 The branch guard runs locally on commit/push. Run the manual full check before
 submitting a pull request.
@@ -84,3 +85,30 @@ checks. No CI service is required by this setup.
 
 Keep paid/live provider calls out of the default hooks. Live acceptance
 requires a separate explicit budget and selected-profile authorization.
+
+
+## Planned releases through Crow
+
+Versioned GitHub releases and human-readable release notes are planned with the
+Crow integration. Publishing automation is deferred; this section does not enable
+it or announce a release.
+
+The release plan should cover:
+
+- A reviewed release tag pointing to an exact tested commit, with an explicit
+  version matrix for the model provider and backend. Their `plugin.yaml` versions
+  remain authoritative for each plugin; the root development-project version is
+  not a release version.
+- Release notes explaining user-visible changes, fixes, supported Hermes and
+  OmniRoute versions, configuration or migration steps, and known limitations.
+- Separate instructions for a tagged installation/update and tracking the latest
+  development commit. A manifest version alone does not make Hermes's Git updater
+  select a published release.
+- Crow running the existing locked offline checks before publishing. Native
+  lifecycle and selected-profile acceptance must be recorded separately; no paid
+  inference calls belong in the release pipeline by default.
+- A review gate before public publication, tested installation/update commands
+  for both plugin subdirectories, and rollback to the previous tested tag.
+
+Choose the tag/version convention and first release during Crow integration.
+Keep future release jobs in Crow; do not add another CI workflow for this plan.
