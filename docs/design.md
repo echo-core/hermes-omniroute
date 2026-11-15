@@ -145,3 +145,21 @@ Offline guards are covered by `tests/test_image_guidance.py`. Run
 profile isolation, credential loss and native disable/re-enable/remove in both
 in-process and host isolation. These tests make no provider inference requests;
 model-driven route choice is a separate live acceptance check.
+
+
+## Reference upload types (backend 0.2.3)
+
+Native image loading may return JPEG bytes with a `.png` filename. Passing that
+stream directly makes the SDK declare `image/png`, which Codex edit validation
+rejects because the bytes do not match. Both image modes now inspect the first
+12 bytes for PNG, JPEG and WebP signatures, then pass an explicit SDK file tuple
+with the matching filename and MIME type. Source bytes, reference order and input
+files remain unchanged. Unknown formats retain the existing native upload path
+and remain subject to gateway validation.
+
+The original streams stay owned by the operation's context stack and are rewound
+before the existing definite-rate-limit fallback. There is no transcode, new
+runtime dependency, provider switch or error retry policy change. Unit contracts
+cover incorrect extensions, single and multiple references, both modes, cleanup
+and rewind. The separate native SDK probe verifies actual multipart headers and
+payloads through a mock transport, with no upstream dispatch.

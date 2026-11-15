@@ -34,6 +34,27 @@ def settings():
     return load_config_readonly().get("image_gen", {}).get(PROVIDER, {})
 
 
+def _reference_upload(file):
+    """Declare recognized image content accurately without altering source bytes."""
+    position = file.tell()
+    try:
+        file.seek(0)
+        header = file.read(12)
+    finally:
+        file.seek(position)
+    if header.startswith(b"\x89PNG\r\n\x1a\n"):
+        extension, mime = "png", "image/png"
+    elif header.startswith(b"\xff\xd8\xff"):
+        extension, mime = "jpg", "image/jpeg"
+    elif header[:4] == b"RIFF" and header[8:12] == b"WEBP":
+        extension, mime = "webp", "image/webp"
+    else:
+        # Preserve existing handling for formats not recognized here; the gateway
+        # remains responsible for accepting or rejecting those references.
+        return file
+    return (f"reference.{extension}", file, mime)
+
+
 class OmniRouteImages(ImageGenProvider):
     @property
     def name(self):
@@ -137,7 +158,8 @@ class OmniRouteImages(ImageGenProvider):
                 files = [stack.enter_context(_named_bytes_io(ref)) for ref in sources]
                 request = {"model": model, "prompt": prompt, "size": size_for(aspect), "n": 1}
                 if files:
-                    request["image"] = files if len(files) > 1 else files[0]
+                    uploads = [_reference_upload(file) for file in files]
+                    request["image"] = uploads if len(uploads) > 1 else uploads[0]
                 while True:
                     attempted.append(model)
                     request["model"] = model
