@@ -21,7 +21,8 @@ Work on a feature branch and submit a pull request; never commit or push directl
 to main/master. Use Conventional Commit messages. Read CONTRIBUTING.md and install
 prek before committing. Keep all remote hooks frozen to full commit SHAs;
 update them deliberately with prek update --freeze and review the resulting diff.
-Run the manual hook suite and offline tests before pushing. Do not bypass failed
+Use `uv sync --locked` and `uv run --locked prek install --force` for setup.
+Run `uv run --locked prek run --all-files --stage manual` and offline tests before pushing. Do not bypass failed
 checks, rewrite published history or change repository visibility without explicit
 user authorization. Checks are offline with respect to model/provider APIs. Development
 tooling does not authorize deployment or changes to installed Hermes plugins.
