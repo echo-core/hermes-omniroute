@@ -122,3 +122,26 @@ this migration. The pilot had only one attributable public acceptance entry.
   order, partial failures and truncation through normal Hermes tool entry points.
 - Fresh-chat acceptance is distinct from endpoint/fixture tests. Paid provider
   tests require an explicit budget. Preserve existing voice selections.
+
+## Image routing context (backend 0.2.2)
+
+The backend registers `omniroute.image-routing` with the native
+`register_system_prompt_section` API. A bounded callable reads selection and
+availability when rendered; a captured home guard suppresses cross-profile reuse.
+It emits only for the selected, available OmniRoute image backend and contains
+no keys, endpoints, user content or model IDs. Ordinary versus Complex selection
+continues through the configured native tools, with exact-name deferred discovery.
+The instruction honors explicitly requested alternative services and treats
+unavailable/denied tools as blockers, without enabling them or bypassing approvals.
+
+Core owns prompt persistence and registration cleanup. New prompt builds reflect
+disable/remove; existing cached prompts are not silently rewritten. Test fresh
+sessions and native refresh separately from registration/rendering. Plugin unload
+is not a revocation of historical prompt bytes. Tool-search settings, connector
+grants and per-user SOUL files remain outside this change.
+
+Offline guards are covered by `tests/test_image_guidance.py`. Run
+`tests/native_image_guidance_probe.py` through Hermes's runtime to test selection,
+profile isolation, credential loss and native disable/re-enable/remove in both
+in-process and host isolation. These tests make no provider inference requests;
+model-driven route choice is a separate live acceptance check.
