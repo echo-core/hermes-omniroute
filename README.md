@@ -92,6 +92,11 @@ web:
     base_url: https://omniroute.example.com/v1
 ```
 
+The model provider also supplies this endpoint to Hermes's native auxiliary
+clients, including vision and title generation. They use the current profile's
+key and configured gateway URL; no separate endpoint or fixed upstream model is
+needed. Keep your existing `auxiliary` model selections such as `auto/vision`.
+
 The image models shown above are the current defaults. They require a working
 Codex connection in OmniRoute and access through your gateway key. You can replace
 them with image model IDs supported by your gateway's OpenAI-compatible image API.

@@ -7,8 +7,7 @@ from providers.base import ProviderProfile
 
 
 class OmniRouteProfile(ProviderProfile):
-    def get_model_context_length(self, model):
-        from agent.model_metadata import _resolve_custom_endpoint_context_length
+    def _configured_base_url(self):
         from agent.web_search_provider import get_provider_env
         from hermes_cli.config import load_config_readonly
 
@@ -34,6 +33,17 @@ class OmniRouteProfile(ProviderProfile):
             or url.fragment
         ):
             raise ValueError("Configure a trusted OmniRoute HTTPS endpoint ending in /v1")
+        return base_url
+
+    def runtime_base_url(self, *, api_key, default, env_url):
+        # Hermes resolves auxiliary credentials separately from model.base_url.
+        return self._configured_base_url()
+
+    def get_model_context_length(self, model):
+        from agent.model_metadata import _resolve_custom_endpoint_context_length
+        from agent.web_search_provider import get_provider_env
+
+        base_url = self._configured_base_url()
         key = get_provider_env("OMNIROUTE_API_KEY")
         if not key:
             raise ValueError("The scoped OmniRoute credential is unavailable")
