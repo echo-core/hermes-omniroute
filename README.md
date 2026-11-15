@@ -151,7 +151,10 @@ maintain a separate chat-model list or set a manual context limit.
 
 Regular uses Hermes's `image_generate` tool. Complex uses the additional
 `image_generate_complex` tool for detailed composition, text or demanding edits.
-Both support reference images. You can ask Hermes explicitly:
+Both support reference images. PNG, JPEG and WebP uploads declare their actual
+content type, even if an attachment's filename has the wrong extension. The
+original image bytes are preserved; the plugin does not convert or rename source
+files. You can ask Hermes explicitly:
 
 > Use image_generate to create a simple illustration of a lighthouse at sunset.
 

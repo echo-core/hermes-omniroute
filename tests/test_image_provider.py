@@ -129,3 +129,79 @@ def test_registration_adds_complex_without_overriding_builtin(plugin):
     assert registration["name"] == "image_generate_complex"
     assert registration.get("override", False) is False
     assert registration["schema"]["parameters"]["required"] == ["prompt"]
+
+
+@pytest.mark.parametrize(
+    "header,mime,filename",
+    [
+        (b"\x89PNG\r\n\x1a\n", "image/png", "reference.png"),
+        (b"\xff\xd8\xff", "image/jpeg", "reference.jpg"),
+        (b"RIFF\x00\x00\x00\x00WEBP", "image/webp", "reference.webp"),
+    ],
+)
+def test_upload_type_follows_bytes_instead_of_filename(plugin, header, mime, filename):
+    value, *_ = plugin
+    original = header + b"synthetic-payload"
+    file = io.BytesIO(original)
+    file.name = "wrong-extension.bin"
+    file.seek(2)
+    upload = value._reference_upload(file)
+    assert upload == (filename, file, mime)
+    assert file.getvalue() == original and file.tell() == 2
+    assert file.name == "wrong-extension.bin"
+
+
+def test_unknown_upload_preserves_native_handling(plugin):
+    value, *_ = plugin
+    file = io.BytesIO(b"unrecognized-image-format")
+    file.seek(3)
+    assert value._reference_upload(file) is file
+    assert file.tell() == 3
+
+
+@pytest.mark.parametrize("mode", ["regular", "complex"])
+@pytest.mark.parametrize("count", [1, 2])
+def test_mislabeled_references_keep_content_order_and_close(plugin, monkeypatch, mode, count):
+    value, client, *_ = plugin
+    payloads = [b"\xff\xd8\xffsynthetic-jpeg", b"RIFF\x00\x00\x00\x00WEBPsynthetic-webp"][:count]
+    files = []
+
+    def named_file(ref):
+        file = io.BytesIO(payloads[len(files)])
+        file.name = "upload.png"
+        files.append(file)
+        return file
+
+    monkeypatch.setattr(value, "_named_bytes_io", named_file)
+    result = value.OmniRouteImages().generate(
+        "Synthetic", reference_image_urls=["/tmp/fixture.png"] * count, mode=mode
+    )
+    assert result["success"]
+    uploaded = client.images.edit.call_args.kwargs["image"]
+    uploaded = uploaded if isinstance(uploaded, list) else [uploaded]
+    assert [item[2] for item in uploaded] == ["image/jpeg", "image/webp"][:count]
+    assert [item[1] for item in uploaded] == files
+    assert all(file.closed for file in files)
+    client.images.generate.assert_not_called()
+
+
+def test_mime_upload_rewinds_after_definite_rate_limit(plugin, monkeypatch):
+    value, client, _, RateLimitError, _, _ = plugin
+    file = io.BytesIO(b"\xff\xd8\xffsynthetic-jpeg")
+    file.name = "upload.png"
+    monkeypatch.setattr(value, "_named_bytes_io", lambda _: file)
+    response = client.images.edit.return_value
+    calls = []
+
+    def edit(**kwargs):
+        stream = kwargs["image"][1]
+        assert stream.tell() == 0
+        calls.append(stream.read())
+        if len(calls) == 1:
+            raise RateLimitError()
+        return response
+
+    client.images.edit.side_effect = edit
+    assert value.OmniRouteImages().generate("Synthetic", image_url="/tmp/fixture.png")["success"]
+    assert calls == [b"\xff\xd8\xffsynthetic-jpeg"] * 2
+    assert file.closed
