@@ -18,8 +18,8 @@ deployment identities and hosts belong in external deployment records.
 ## Repository checks
 
 Work on a feature branch and submit a pull request; never commit or push directly
-to main/master. Use Conventional Commit messages. Read CONTRIBUTING.md and install
-prek before committing. Keep all remote hooks frozen to full commit SHAs;
+to main/master. Use Conventional Commit messages with a short explanatory body.
+Read CONTRIBUTING.md and install prek before committing. Keep all remote hooks frozen to full commit SHAs;
 update them deliberately with prek update --freeze and review the resulting diff.
 Use `uv sync --locked` and `uv run --locked prek install --force` for setup.
 Run `uv run --locked prek run --all-files --stage manual` and offline tests before pushing. Do not bypass failed

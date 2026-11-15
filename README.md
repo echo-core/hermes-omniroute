@@ -111,6 +111,19 @@ On managed installations, administrators can place common settings in
 `/etc/hermes/config.yaml`. Managed values override local settings; keys should
 remain separate for each user. Keep plugin enablement local to each profile.
 
+### Image-tool guidance
+
+When OmniRoute is selected and available, the backend adds a short native prompt
+section directing image requests to Regular or Complex, including how to load
+those tools when Hermes defers them behind `tool_search`. An explicitly requested
+alternative service still takes precedence. The section does not grant tools,
+bypass approvals or change provider/model settings.
+
+The section follows the active profile and is removed from new prompt builds
+when the backend is disabled or uninstalled. Existing conversations keep their
+saved prompt; start a fresh chat or use Hermes's native session prompt refresh
+when adopting an update. Disabling a plugin does not rewrite saved conversations.
+
 ### 3. Restart and check
 
 Restart the gateway after the initial setup, once active work has finished:

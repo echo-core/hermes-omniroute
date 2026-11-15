@@ -51,7 +51,8 @@ need a Hermes runtime and are separate from this offline suite.
 Use Conventional Commits, for example `fix(web): preserve extraction redirects` or
 `test(images): cover regular fallback`. The commit-msg hook rejects unstructured,
 fixup and merge messages. Public issue titles remain plain declarative reports;
-they are not Git commit messages. Existing historical commits are not rewritten.
+they are not Git commit messages. Include a short commit-message body explaining
+what changed and why. Existing historical commits are not rewritten.
 
 The branch guard runs locally on commit/push. Run the manual full check before
 submitting a pull request.
@@ -79,8 +80,8 @@ uv run --locked prek run --all-files --stage manual
 
 Use `uv add --dev` to add dependencies or deliberately change their version ranges.
 Review both `pyproject.toml` and `uv.lock`. The lockfile hook rejects stale locks;
-keep it and the offline-test hook enabled for your Crow pipeline or other local
-checks. No CI service is required by this setup.
+keep it and the offline-test hook enabled for your local checks. No CI service
+is required by this setup.
 
 Keep paid/live provider calls out of the default hooks. Live acceptance
 requires a separate explicit budget and selected-profile authorization.
