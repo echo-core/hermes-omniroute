@@ -6,22 +6,38 @@ credentials and native plugin lifecycle behavior.
 
 ## Local setup
 
-Use Python 3.11 or newer and an isolated development environment:
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then run:
 
 ```sh
-python -m venv .venv
-. .venv/bin/activate
-python -m pip install --require-hashes -r requirements-dev.txt
-prek install --force
-prek run --all-files --stage manual
+uv sync --locked
+uv run --locked prek install --force
+uv run --locked prek run --all-files --stage manual
 ```
+
+uv selects Python 3.11 from `.python-version` and manages `.venv`. It can download
+that interpreter if needed. Development dependencies are declared in the `dev`
+group in `pyproject.toml`; commit `uv.lock` so everyone uses the same resolutions.
+The root project is development-only and is not installed as a package. Each
+plugin keeps its own version in `plugin.yaml`; the development project's version
+is not a plugin release version. Hermes owns its runtime and dependencies.
 
 The install command replaces inherited pre-commit shims with prek and installs
 pre-commit, commit-msg and pre-push hooks. They require this repository's config;
-a missing configuration does not silently skip checks. Keep the environment
-active while committing or pushing so the offline-test hook uses the frozen test
-dependencies. These dependencies are development-only: do not install them into
-Hermes's managed runtime.
+a missing configuration does not silently skip checks. The test hook uses
+`uv run --locked --offline`, so commits and pushes work without activating a
+virtual environment and cannot silently change the lockfile or fetch test packages.
+Run `uv sync --locked` first when setting up a checkout or after pulling a lockfile
+change. Hook environments may need network access on their first setup.
+
+## Run tests
+
+```sh
+uv run --locked python -m pytest -q tests
+```
+
+These tests use synthetic inputs and mocked provider responses. The separate
+`tests/native_*_probe.py` scripts require Hermes's own runtime; uv's development
+environment does not replace that runtime.
 
 ## Checks and commits
 
@@ -46,19 +62,25 @@ All remote hook revisions are pinned to full commit SHAs with
 release comments. Refresh hooks deliberately on a feature branch:
 
 ```sh
-prek update --freeze
-prek run --all-files --stage manual
+uv run --locked prek update --freeze
+uv run --locked prek run --all-files --stage manual
 ```
 
 Review upstream changes, the frozen revisions and the full diff before committing.
-There is no commit-time hook that silently advances these pins. To update the
-Python test/tool dependencies, edit `requirements-dev.in`, then regenerate the
-hash-locked file with uv:
+There is no commit-time hook that silently advances these pins. To update a
+specific development dependency within its declared version range:
 
 ```sh
-uv pip compile requirements-dev.in --python-version 3.11 --universal --generate-hashes --index-url https://pypi.org/simple --output-file requirements-dev.txt
-python -m pip install --require-hashes -r requirements-dev.txt
+uv lock --upgrade-package prek
+uv sync --locked
+uv run --locked prek install --force
+uv run --locked prek run --all-files --stage manual
 ```
+
+Use `uv add --dev` to add dependencies or deliberately change their version ranges.
+Review both `pyproject.toml` and `uv.lock`. The lockfile hook rejects stale locks;
+keep it and the offline-test hook enabled for your Crow pipeline or other local
+checks. No CI service is required by this setup.
 
 Keep paid/live provider calls out of the default hooks. Live acceptance
 requires a separate explicit budget and selected-profile authorization.

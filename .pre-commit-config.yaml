@@ -43,9 +43,15 @@ repos:
         args: [--strict, --verbose]
   - repo: local
     hooks:
+      - id: uv-lock
+        name: check uv lockfile
+        entry: uv lock --check --offline
+        language: system
+        files: '^(pyproject\.toml|uv\.lock|\.python-version)$'
+        pass_filenames: false
       - id: pytest
         name: offline contract tests
-        entry: python -m pytest -q tests
+        entry: uv run --locked --offline python -m pytest -q tests
         language: system
         pass_filenames: false
         always_run: true

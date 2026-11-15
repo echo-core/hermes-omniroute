@@ -198,6 +198,7 @@ a local Git source updates from that local repository, not directly from GitHub.
   change and reopen the picker.
 - **A setting will not change:** check whether it is pinned by managed config.
 
-For development setup and frozen prek checks, see
+For development, run `uv sync --locked`; dependencies are pinned in `uv.lock`.
+For tests and frozen prek checks, see
 [CONTRIBUTING.md](CONTRIBUTING.md). The [design notes](docs/design.md) cover the
 native integration, profile isolation, migration and rollback behavior.
