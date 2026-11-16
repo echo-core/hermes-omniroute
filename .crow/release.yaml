@@ -4,7 +4,7 @@ when:
 
 variables:
   RELEASE_VERSION:
-    description: 'Publish the reviewed stable version, for example v0.2.3'
+    description: 'Publish the reviewed stable version, for example v0.1.0'
     required: true
     default: ''
 
