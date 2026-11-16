@@ -298,6 +298,47 @@ class ReleaseNotes(unittest.TestCase):
                     release.validate_new_release(self.root, "v0.1.0", "b" * 40)
 
 
+class ReleaseVisibility(unittest.TestCase):
+    def test_publication_visibility_retries_only_reads_and_preserves_result(self):
+        missing = urllib.error.HTTPError("https://api.github.com/", 404, "absent", {}, None)
+        expected = {"tag_name": "v0.1.0"}
+        with (
+            patch.object(
+                release, "fetch_release", side_effect=[missing, missing, expected]
+            ) as fetch,
+            patch.object(release.time, "sleep") as sleep,
+            patch.object(release, "request_tag") as write,
+        ):
+            self.assertIs(release.wait_for_release("example/integration", "v0.1.0"), expected)
+        self.assertEqual(fetch.call_count, 3)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [2, 4])
+        write.assert_not_called()
+
+    def test_persistent_404_fails_after_bounded_read_retries(self):
+        missing = urllib.error.HTTPError("https://api.github.com/", 404, "absent", {}, None)
+        with (
+            patch.object(release, "fetch_release", side_effect=missing) as fetch,
+            patch.object(release.time, "sleep") as sleep,
+            self.assertRaises(urllib.error.HTTPError),
+        ):
+            release.wait_for_release("example/integration", "v0.1.0")
+        self.assertEqual(fetch.call_count, 6)
+        self.assertEqual(sum(call.args[0] for call in sleep.call_args_list), 60)
+
+    def test_other_api_errors_fail_immediately(self):
+        for status in [403, 429, 500]:
+            error = urllib.error.HTTPError("https://api.github.com/", status, "failed", {}, None)
+            with (
+                self.subTest(status=status),
+                patch.object(release, "fetch_release", side_effect=error) as fetch,
+                patch.object(release.time, "sleep") as sleep,
+                self.assertRaises(urllib.error.HTTPError),
+            ):
+                release.wait_for_release("example/integration", "v0.1.0")
+            fetch.assert_called_once()
+            sleep.assert_not_called()
+
+
 class ManualTagRequest(unittest.TestCase):
     def test_tag_creation_is_one_verified_post_with_no_token_output(self):
         sha = "a" * 40

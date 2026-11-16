@@ -7,6 +7,11 @@ contents; publication is recorded in GitHub Releases.
 
 ## Unreleased
 
+### Development
+
+- Give GitHub up to one minute to expose a newly published release before the
+  final check fails. Retry only missing-release reads; never repeat publication.
+
 ## v0.1.0
 
 First public release.
