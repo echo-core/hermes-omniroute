@@ -7,6 +7,7 @@ import json
 import os
 import re
 import subprocess
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -186,6 +187,21 @@ def fetch_release(repository: str, tag: str) -> dict:
         return json.load(response)
 
 
+def wait_for_release(repository: str, tag: str) -> dict:
+    # A just-created release can briefly return 404 from GitHub's public reads.
+    # Retry reads only; never retry publication or accept mismatched contents.
+    delays = (2, 4, 8, 16, 30)
+    for attempt in range(len(delays) + 1):
+        try:
+            return fetch_release(repository, tag)
+        except urllib.error.HTTPError as error:
+            if error.code != 404 or attempt == len(delays):
+                raise
+            print(f"Release {tag} is not visible yet; retrying verification in {delays[attempt]}s")
+            time.sleep(delays[attempt])
+    raise AssertionError("Unreachable release verification state")
+
+
 def verify_release(data: dict, tag: str, title: str, notes: str) -> None:
     if (
         data.get("tag_name") != tag
@@ -288,7 +304,7 @@ def main() -> None:
         (output / "notes.md").write_text(notes)
         print(f"Prepared {tag} from reviewed source")
     else:
-        verify_release(fetch_release(repository, tag), tag, title, notes)
+        verify_release(wait_for_release(repository, tag), tag, title, notes)
         print(f"Verified published GitHub release {tag}")
 
 
