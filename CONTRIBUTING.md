@@ -1,8 +1,32 @@
 # Contributing
 
 Use a feature branch and open a pull request. Do not commit or push directly to
-`main` or `master`. Keep changes generic and preserve independent Hermes profile
+`main`, `master` or `dev`. Feature PRs target `dev`; accepted releases are promoted
+from `dev` to `main` in a separate PR. Keep changes generic and preserve independent Hermes profile
 credentials and native plugin lifecycle behavior.
+
+## Stable and development branches
+
+`main` is the stable channel consumed by ordinary Hermes Git installs. `dev` is
+bleeding edge. Fetch origin and branch from the latest `origin/dev` for feature
+work. Open a PR to `dev`, run Crow checks, and verify changed runtime behavior in
+an explicitly authorized pilot profile before promoting it to `main`. Record the
+acceptance and any limitations in the PR; documentation-only changes do not need
+provider calls. Do not use paid/live tests without a separately approved budget.
+
+Prepare one new bundle version, changelog entry and reviewed notes in `dev` for
+each promotion. Open a separate `dev` → `main` PR. Crow checks that the source
+branch is `dev`, notes match the plugin versions, and the bundle version is newer
+than existing stable tags. After merge, main's checks and release gates run, then
+Crow creates and verifies the version tag. Its tag event starts native GitHub
+publication and verification. Inspect both pipeline runs; tag creation success
+alone does not prove publication. Do not merge another promotion while publication
+is incomplete. Version tags remain immutable, including when release jobs fail.
+
+Do not merge unfinished features to `main`: users can pull an accepted main merge
+before its GitHub Release page is published. Tags are snapshots, not an update gate.
+The changed plugin's manifest version must be bumped for runtime changes; unchanged
+plugins retain their version. Normal updates stay native, with no custom updater.
 
 ## Local setup
 
@@ -89,33 +113,47 @@ requires a separate explicit budget and selected-profile authorization.
 ## Crow checks and releases
 
 The workflow in `.crow/pipeline.yaml` follows the same checks as local development.
-PRs, pushes and ordinary manual checks execute locked uv/prek checks without a
-publishing credential. The separate manual Release workflow creates an approved
-version tag; version tags prepare, publish and verify a GitHub release
+PRs, development pushes and ordinary manual checks run locked uv/prek checks
+without a publishing credential. Main pushes create the prepared version tag
+after checks; version tags prepare, publish and verify a GitHub release
 through the Crow-compatible [Git Release plugin](https://woodpecker-ci.org/plugins/release).
 The workflow images are pinned by version and digest.
 
 For a stable release:
 
-1. Add the versioned changelog entry and `docs/releases/vX.Y.Z.md` in a PR. Include
-   the exact version of each native plugin; their versions need not be identical.
-2. Merge the reviewed PR. In Crow, open **Run pipeline**, select the latest `main`,
-   and select the **release** workflow (`.crow/release.yaml`).
-3. Enter `RELEASE_VERSION`, for example `v0.1.0`, then click **Run pipeline**.
-   Crow runs checks, validates the release notes and the current default-branch
-   commit, then creates the tag. No local Git commands are needed.
-   The manual run finishes after verifying tag creation; follow the separate
-   **tag-triggered pipeline** for publication. Keep Tags enabled in Crow.
-   You can still create/push an approved tag with Git instead.
-4. Crow runs the existing checks, prepares the notes, publishes the GitHub Release
-   with the plugin, then verifies its title, tag and notes. No manual GitHub release
-   creation is needed. Source archives are provided by GitHub.
+1. Develop through feature PRs into `dev`; complete checks and scoped acceptance.
+2. Prepare a new changelog version and matching `docs/releases/vX.Y.Z.md` in `dev`,
+   listing both exact plugin versions. The first bundle is `v0.1.0`.
+3. Open and review a `dev` → `main` PR. Crow's promotion check validates the notes,
+   version and source branch without a publishing credential.
+4. Merge the promotion. Crow checks the latest main commit, creates its version
+   tag automatically, and verifies the tag. No local Git or release-button step.
+5. Follow the tag-triggered pipeline: checks, prepared notes, native Release plugin
+   publication and public verification. GitHub provides source archives.
+
+The separate **release** manual workflow is retained for recovery. Select latest
+`main`, enter its prepared `RELEASE_VERSION` (for example `v0.1.0`), then run it.
+It validates and creates a missing tag at that main commit. If the tag already
+exists at that commit, it makes no write: inspect/retry the original tag pipeline
+instead. A tag at another commit is never moved. Do not use the recovery workflow
+to release an unprepared version or bypass a failed gate.
 
 Only stable `vMAJOR.MINOR.PATCH` tags are supported. Missing or unfinished notes,
 manifest/version-matrix differences, unmerged source and conflicting existing
 release metadata stop publication. Retries preserve an identical existing release;
 the plugin does not overwrite notes or upload extra artifacts. Release-note links
 are rewritten to the tagged source so they work on the GitHub Releases page.
+
+### Writing release notes
+
+Write for someone using the plugins. Explain what they can do, what changed,
+how to install or update, and any limitations that affect them. Use short sections,
+familiar words and concrete examples. Explain necessary technical terms on first
+use. Include commands, versions and error messages when they help someone act.
+Keep internal function names, implementation details, unexplained abbreviations,
+raw commit lists and pipeline logs out of the main release description. Review
+notes as part of the stable promotion; GitHub's generated PR list is not a
+substitute for that user-facing explanation.
 
 ### Release and plugin versions
 
@@ -141,16 +179,16 @@ change either manifest. Existing native update commands remain unchanged.
 Enable the repository in Crow and use the existing webhook with the default
 `.crow/` configuration directory. Provide a repository-scoped secret named
 `github_release_token`, using a GitHub fine-grained token with **Contents: read and
-write** for this repository only. Allow the secret for **tag** and **manual**
-events; leave PR/push events disabled. Leave the optional image restriction empty:
-the manual helper is a command step, while image-restricted secrets are intended
+write** for this repository only. Allow the secret for **tag**, **manual**
+and **push** events; leave PR events disabled. Leave the optional image restriction empty:
+the tag helper is a command step, while image-restricted secrets are intended
 for native plugin steps. Both workflow images remain digest-pinned.
 Keep the token out of source files and logs. A webhook alone does
 not configure the repository or provide its publishing credential.
 
-Only `create-release-tag` (manual) and `publish-release` (tag) reference the
-credential. The manual helper only creates a tag through GitHub's API, with no
-credential in command arguments or saved artifacts; release publication stays in
+Only `create-auto-release-tag` (main push), `create-release-tag` (manual) and
+`publish-release` (tag) reference the credential. The helper only creates a tag
+through GitHub's API, with no credential in command arguments or saved artifacts; release publication stays in
 the native plugin without custom commands. Preparation and verification use unauthenticated
 public GitHub reads; an API outage or rate limit fails the job visibly. If publishing
 succeeded before a later verification failure, retry the original tag pipeline;
