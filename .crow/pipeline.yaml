@@ -1,0 +1,55 @@
+when:
+  - event: [pull_request, push, manual, tag]
+
+variables:
+  - &python_image 'ghcr.io/astral-sh/uv:0.13.8-python3.11-trixie-slim@sha256:7a0b97c592d27e887e0bb9be01c45135c8f0fc00719faa19ec1f8cbcc73d9b69'
+  - &release_image 'docker.io/woodpeckerci/plugin-release:0.3.3@sha256:26c8dec7b8b384d44b1c44cd0b041648feae80e0ba506da6f74a0a0b6ad05538'
+
+steps:
+  - name: checks
+    image: *python_image
+    commands:
+      - apt-get update
+      - apt-get install -y --no-install-recommends git
+      - uv sync --locked
+      - SKIP=no-commit-to-branch uv run --locked --offline prek run --all-files --stage manual
+
+  - name: prepare-release
+    image: *python_image
+    depends_on: [checks]
+    when:
+      - event: tag
+        ref: refs/tags/v*
+    commands:
+      - apt-get update
+      - apt-get install -y --no-install-recommends git
+      - python scripts/release.py prepare
+
+  - name: publish-release
+    image: *release_image
+    depends_on: [prepare-release]
+    when:
+      - event: tag
+        ref: refs/tags/v*
+    settings:
+      api_key:
+        from_secret: github_release_token  # pragma: allowlist secret
+      base_url: https://api.github.com
+      upload_url: https://uploads.github.com/
+      title: .release/title.txt
+      note: .release/notes.md
+      target: ${CI_COMMIT_SHA}
+      draft: false
+      prerelease: false
+      overwrite: false
+      file_exists: skip
+      generate_release_notes: false
+
+  - name: verify-release
+    image: *python_image
+    depends_on: [publish-release]
+    when:
+      - event: tag
+        ref: refs/tags/v*
+    commands:
+      - python scripts/release.py verify

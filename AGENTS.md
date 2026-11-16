@@ -18,7 +18,9 @@ deployment identities and hosts belong in external deployment records.
 ## Repository checks
 
 Work on a feature branch and submit a pull request; never commit or push directly
-to main/master. Use Conventional Commit messages with a short explanatory body.
+to main/master. Fetch origin/main before creating each feature branch and again
+before opening its PR. Start from current origin/main and keep commits focused;
+avoid merge commits just to synchronize branches. Preserve the no-force-push rule. Use Conventional Commit messages with a short explanatory body.
 Read CONTRIBUTING.md and install prek before committing. Keep all remote hooks frozen to full commit SHAs;
 update them deliberately with prek update --freeze and review the resulting diff.
 Use `uv sync --locked` and `uv run --locked prek install --force` for setup.

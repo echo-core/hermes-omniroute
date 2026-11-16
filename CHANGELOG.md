@@ -2,11 +2,14 @@
 
 User-facing changes to the Hermes OmniRoute integration are recorded here.
 Repository releases can include different versions of the two native plugins.
-Changes under **Unreleased** have not been published as a GitHub release.
+Changes under **Unreleased** are pending. Versioned entries describe release
+contents; publication is recorded in GitHub Releases.
 
 ## Unreleased
 
-### Prepared for v0.2.3 — first public release
+## v0.2.3
+
+First public release.
 
 | Plugin | Version |
 | --- | --- |
@@ -39,13 +42,15 @@ Changes under **Unreleased** have not been published as a GitHub release.
 
 ### Development
 
+- Add a Crow workflow for locked checks and tag-triggered GitHub releases through
+  the Git Release plugin, using reviewed notes and a tag-only publishing secret.
 - Manage development tooling with uv and a committed lockfile.
 - Use frozen prek hooks for formatting, linting, secret checks, Conventional
   Commits, branch protection and offline contract tests.
 - Include native lifecycle, profile-isolation and SDK multipart probes alongside
   the offline unit suite. Provider calls are excluded from the default checks.
 
-See the [prepared v0.2.3 release notes](docs/releases/v0.2.3.md) for installation,
+See the [v0.2.3 release notes](docs/releases/v0.2.3.md) for installation,
 compatibility and known limitations.
 
 ## Development milestones
