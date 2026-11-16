@@ -19,7 +19,7 @@ plugins that provide tools. See the [design notes](docs/design.md) for details.
 Tested with **Hermes v0.23.1** and **OmniRoute 3.8.54**. Voice and video are outside
 this integration's current capabilities.
 
-See the [changelog](CHANGELOG.md) and [first-release notes](docs/releases/v0.2.3.md)
+See the [changelog](CHANGELOG.md) and [first-release notes](docs/releases/v0.1.0.md)
 for the included plugin versions, fixes and compatibility limits.
 
 ## Install

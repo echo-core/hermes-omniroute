@@ -7,7 +7,7 @@ contents; publication is recorded in GitHub Releases.
 
 ## Unreleased
 
-## v0.2.3
+## v0.1.0
 
 First public release.
 
@@ -52,7 +52,7 @@ First public release.
 - Include native lifecycle, profile-isolation and SDK multipart probes alongside
   the offline unit suite. Provider calls are excluded from the default checks.
 
-See the [v0.2.3 release notes](docs/releases/v0.2.3.md) for installation,
+See the [v0.1.0 release notes](docs/releases/v0.1.0.md) for installation,
 compatibility and known limitations.
 
 ## Development milestones

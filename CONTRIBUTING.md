@@ -101,7 +101,7 @@ For a stable release:
    the exact version of each native plugin; their versions need not be identical.
 2. Merge the reviewed PR. In Crow, open **Run pipeline**, select the latest `main`,
    and select the **release** workflow (`.crow/release.yaml`).
-3. Enter `RELEASE_VERSION`, for example `v0.2.3`, then click **Run pipeline**.
+3. Enter `RELEASE_VERSION`, for example `v0.1.0`, then click **Run pipeline**.
    Crow runs checks, validates the release notes and the current default-branch
    commit, then creates the tag. No local Git commands are needed.
    The manual run finishes after verifying tag creation; follow the separate
@@ -116,6 +116,25 @@ manifest/version-matrix differences, unmerged source and conflicting existing
 release metadata stop publication. Retries preserve an identical existing release;
 the plugin does not overwrite notes or upload extra artifacts. Release-note links
 are rewritten to the tagged source so they work on the GitHub Releases page.
+
+### Release and plugin versions
+
+Repository tags version the complete integration bundle. The first repository
+release is `v0.1.0`, containing provider `0.2.1` and backend `0.2.3`. The bundle
+version need not equal either plugin version; record both in every release's
+changelog and notes. Increment a plugin's manifest version only when that plugin
+changes. A bundle release never downgrades a plugin to the bundle's version.
+
+Use patch bundle releases for compatible fixes and minor releases for new
+features. While the bundle is `0.x`, breaking changes also require a minor bump
+and explicit migration notes; after `1.0.0`, they require a major bump. Increment
+the changed plugin's version independently, documenting any compatibility impact.
+Do not rename, move or reuse published tags.
+
+Hermes updates each plugin from its configured Git source, not the newest GitHub
+release. Ordinary unpinned installs continue following Git; exact-SHA installs
+stay pinned. Publishing a bundle release does not trigger a client update or
+change either manifest. Existing native update commands remain unchanged.
 
 ### Crow repository setup
 
