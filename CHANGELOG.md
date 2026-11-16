@@ -1,47 +1,62 @@
-# Changes
+# Changelog
 
-## 0.1.0 — development pilot
-
-- Include native model and Regular/Complex image modules.
-- Add native web-provider0.1.0 for search and Markdown extraction.
-- Profile-scoped credentials/config, explicit gateway URL, no redirects/retries.
-- Add16offline wire-contract/security/error tests.
-- Initial profile acceptance pending; optional voice/video modules not implemented.
+User-facing changes to the Hermes OmniRoute integration are recorded here.
+Repository releases can include different versions of the two native plugins.
+Changes under **Unreleased** have not been published as a GitHub release.
 
 ## Unreleased
 
-- Add frozen prek hooks, Conventional Commit and protected-branch guards,
-  Python lint/format and offline credential checks. Freeze development
-  dependencies with hashes and run offline tests through prek before pushing.
+### Prepared for v0.2.3 — first public release
 
-- Use gateway-selected search and fetch pools in the configuration example;
-  verify both requests omit upstream provider selection when overrides are unset.
+| Plugin | Version |
+| --- | --- |
+| `hermes-omniroute-provider` | 0.2.1 |
+| `hermes-omniroute-backend` | 0.2.3 |
 
-- Declare the shared GitHub homepage in both native manifests. Hermes v0.23.1
-  accepts this metadata but does not render it on user-plugin cards.
+### Added
 
-- Added a native-install reproduction of the model/backend lifecycle gap.
-- Documented a proposed upstream model export under one backend identity.
-- Fixed generic context lookup to resolve the configured endpoint and current
-  profile's key. Declared the endpoint variable separately from API key aliases.
-- Added seven offline model regressions. All 23 offline model/web tests pass.
+- Native OmniRoute model identity, live model catalogs and automatic context-limit
+  discovery using the current profile's gateway and key.
+- Regular and Complex image generation through the existing Hermes image tools.
+- Web search and Markdown page extraction through OmniRoute. The gateway selects
+  from the providers available to the profile's key unless explicitly overridden.
+- Profile-scoped image-tool guidance, including discovery of deferred image tools.
+  Explicit requests for another service still take precedence.
+- Shared GitHub homepage metadata in both plugin manifests. Hermes 0.23.1 accepts
+  the metadata but does not display it on user-plugin cards.
 
-## 0.2.0
+### Fixed
 
-- Package a model provider and a combined image/web backend as two native plugins.
-- Preserve Regular/Complex image roles and native tool names while adding gateway
-  search and extraction in the backend.
-- Keep a shared identity as a future upstream integration target.
+- Supply the current profile's gateway endpoint to native auxiliary clients,
+  including vision and title generation.
+- Discover context limits with the configured endpoint and current profile's key;
+  keep cached metadata isolated between profiles sharing a gateway.
+- Preserve extraction's final URL and requested source URL so Hermes can enforce
+  redirect safety and validate cached results. Reject non-web final URLs.
+- Identify PNG, JPEG and WebP image references from their bytes and send the
+  matching upload MIME type, even when the filename has the wrong extension.
+  Preserve reference bytes, order and stream cleanup.
 
-- Native two-profile lifecycle passes in both execution modes. Model cache cleanup
-  is verified after a fresh process. In-process web fixtures cover errors and SSRF.
+### Development
 
-## 0.2.1 backend
+- Manage development tooling with uv and a committed lockfile.
+- Use frozen prek hooks for formatting, linting, secret checks, Conventional
+  Commits, branch protection and offline contract tests.
+- Include native lifecycle, profile-isolation and SDK multipart probes alongside
+  the offline unit suite. Provider calls are excluded from the default checks.
 
-- Preserve the gateway's final page URL for native redirect safety and cache
-  tracking, while binding sourceURL to the requested page.
-- Reject non-web final URLs and include the explicit no-rescue setting in the
-  example configuration.
+See the [prepared v0.2.3 release notes](docs/releases/v0.2.3.md) for installation,
+compatibility and known limitations.
 
-- Verify distinct context metadata for two keys at the same gateway, including
-  warm scope switches and fresh-process disk-cache reuse, with native Hermes.
+## Development milestones
+
+These are pre-release component milestones, not previously published GitHub releases.
+
+| Milestone | Main change |
+| --- | --- |
+| Backend 0.2.3 | Correct image-reference upload types from file contents. |
+| Backend 0.2.2 | Add native guidance for selecting and discovering image tools. |
+| Model provider 0.2.1 | Resolve auxiliary gateway endpoints per profile. |
+| Backend 0.2.1 | Preserve extraction URL provenance and redirect safety. |
+| 0.2.0 | Package the integration as a model provider and a combined image/web backend. |
+| 0.1.0 pilot | Establish native model, image and standalone web adapters with profile-scoped credentials. The standalone web draft was superseded by the combined backend. |
