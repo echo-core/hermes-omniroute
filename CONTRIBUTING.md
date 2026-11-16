@@ -89,8 +89,9 @@ requires a separate explicit budget and selected-profile authorization.
 ## Crow checks and releases
 
 The workflow in `.crow/pipeline.yaml` follows the same checks as local development.
-PRs, pushes and manual runs execute locked uv/prek checks without a publishing
-credential. Version tags additionally prepare, publish and verify a GitHub release
+PRs, pushes and ordinary manual checks execute locked uv/prek checks without a
+publishing credential. The separate manual Release workflow creates an approved
+version tag; version tags prepare, publish and verify a GitHub release
 through the Crow-compatible [Git Release plugin](https://woodpecker-ci.org/plugins/release).
 The workflow images are pinned by version and digest.
 
@@ -98,9 +99,14 @@ For a stable release:
 
 1. Add the versioned changelog entry and `docs/releases/vX.Y.Z.md` in a PR. Include
    the exact version of each native plugin; their versions need not be identical.
-2. Merge the reviewed PR and fetch the latest `main` before selecting its commit.
-3. Create and push the approved `vX.Y.Z` tag on that commit. Crow validates that the
-   remote tag matches the pipeline checkout and belongs to the default branch.
+2. Merge the reviewed PR. In Crow, open **Run pipeline**, select the latest `main`,
+   and select the **release** workflow (`.crow/release.yaml`).
+3. Enter `RELEASE_VERSION`, for example `v0.2.3`, then click **Run pipeline**.
+   Crow runs checks, validates the release notes and the current default-branch
+   commit, then creates the tag. No local Git commands are needed.
+   The manual run finishes after verifying tag creation; follow the separate
+   **tag-triggered pipeline** for publication. Keep Tags enabled in Crow.
+   You can still create/push an approved tag with Git instead.
 4. Crow runs the existing checks, prepares the notes, publishes the GitHub Release
    with the plugin, then verifies its title, tag and notes. No manual GitHub release
    creation is needed. Source archives are provided by GitHub.
@@ -116,16 +122,23 @@ are rewritten to the tagged source so they work on the GitHub Releases page.
 Enable the repository in Crow and use the existing webhook with the default
 `.crow/` configuration directory. Provide a repository-scoped secret named
 `github_release_token`, using a GitHub fine-grained token with **Contents: read and
-write** for this repository only. Restrict the secret to the **tag** event and the
-exact pinned release-plugin image in `.crow/pipeline.yaml`; no other step needs
-that token. Keep it out of PR events, source files and logs. A webhook alone does
+write** for this repository only. Allow the secret for **tag** and **manual**
+events; leave PR/push events disabled. Leave the optional image restriction empty:
+the manual helper is a command step, while image-restricted secrets are intended
+for native plugin steps. Both workflow images remain digest-pinned.
+Keep the token out of source files and logs. A webhook alone does
 not configure the repository or provide its publishing credential.
 
-Only the `publish-release` step references the credential, using plugin settings
-without custom commands. Note preparation and verification use unauthenticated
+Only `create-release-tag` (manual) and `publish-release` (tag) reference the
+credential. The manual helper only creates a tag through GitHub's API, with no
+credential in command arguments or saved artifacts; release publication stays in
+the native plugin without custom commands. Preparation and verification use unauthenticated
 public GitHub reads; an API outage or rate limit fails the job visibly. If publishing
 succeeded before a later verification failure, retry the original tag pipeline;
-do not move the tag or manually overwrite the release.
+do not move the tag or manually overwrite the release. Repeating a manual run for
+an existing same-commit tag makes no write and does not trigger another tag event:
+inspect/retry its original tag pipeline instead. A different-commit tag is refused.
+If main advances during checks, start a fresh manual run from its latest commit.
 
 Run `crow lint --strict .crow/` with a CLI matching the server before changing the
 workflow. The release helper and its negative-path tests run in the normal offline

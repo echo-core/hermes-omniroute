@@ -43,7 +43,9 @@ First public release.
 ### Development
 
 - Add a Crow workflow for locked checks and tag-triggered GitHub releases through
-  the Git Release plugin, using reviewed notes and a tag-only publishing secret.
+  the Git Release plugin, using reviewed notes and a scoped publishing secret.
+- Add a manual Crow Release workflow with a required version field. It validates
+  reviewed source and creates a verified version tag to trigger publication.
 - Manage development tooling with uv and a committed lockfile.
 - Use frozen prek hooks for formatting, linting, secret checks, Conventional
   Commits, branch protection and offline contract tests.
