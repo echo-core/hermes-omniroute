@@ -185,6 +185,15 @@ there is no need to configure a separate search-provider key in Hermes.
 
 ## Updating
 
+`main` is the stable channel. Development flows through feature branches into
+`dev` (bleeding edge), then reaches `main` only when accepted for release. Standard
+Git installs follow the repository's default branch, `main`. Release tags identify
+those accepted snapshots; updates do not wait for GitHub release publication.
+
+Bleeding-edge testing is an explicit choice: use the full commit SHA from `dev`
+with Hermes's `--ref` option. That install stays pinned until deliberately changed;
+`--ref dev` and release tag names are not supported in Hermes 0.23.1.
+
 Update both plugins in the same profile where you installed them:
 
 ```sh
