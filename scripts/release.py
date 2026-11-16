@@ -1,4 +1,4 @@
-"""Prepare reviewed release notes and verify publication; never publish or hold credentials."""
+"""Validate releases, request an approved version tag, and verify publication."""
 
 from __future__ import annotations
 
@@ -49,6 +49,66 @@ def validate_source(root: Path, tag: str, sha: str, ref: str, branch: str) -> No
         fetch.append("--unshallow")
     git(root, *fetch, "origin", f"refs/heads/{branch}")
     git(root, "merge-base", "--is-ancestor", sha, "FETCH_HEAD")
+
+
+def remote_tag(root: Path, tag: str) -> str | None:
+    refs = git(root, "ls-remote", "--tags", "origin", f"refs/tags/{tag}", f"refs/tags/{tag}^{{}}")
+    targets = dict(line.split()[::-1] for line in refs.splitlines())
+    return targets.get(f"refs/tags/{tag}^{{}}", targets.get(f"refs/tags/{tag}"))
+
+
+def validate_manual_source(root: Path, tag: str, sha: str, ref: str, branch: str) -> None:
+    if not TAG.fullmatch(tag) or not re.fullmatch(r"[0-9a-f]{40}", sha):
+        raise ValueError("Expected a stable version and exact commit SHA")
+    if ref != f"refs/heads/{branch}" or git(root, "rev-parse", "HEAD") != sha:
+        raise ValueError("Manual releases must use the checked-out default branch")
+    git(root, "check-ref-format", f"refs/heads/{branch}")
+    refs = git(root, "ls-remote", "--exit-code", "origin", f"refs/heads/{branch}")
+    if refs.split()[0] != sha:
+        raise ValueError("Default branch advanced; start a new manual run from its latest commit")
+    target = remote_tag(root, tag)
+    if target is not None and target != sha:
+        raise ValueError("Existing version tag points to another commit; never move a release tag")
+
+
+def check_existing_release(repository: str, tag: str, notes: str) -> None:
+    try:
+        existing = fetch_release(repository, tag)
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+    else:
+        verify_release(existing, tag, f"Hermes OmniRoute {tag}", notes)
+
+
+def request_tag(root: Path, repository: str, tag: str, sha: str) -> None:
+    # This is the only credentialed helper operation: create one immutable tag.
+    token = os.environ.get("GITHUB_RELEASE_TOKEN", "")
+    if not token:
+        raise ValueError("Missing Crow publishing secret for manual tag creation")
+    if remote_tag(root, tag) == sha:
+        print(f"Tag {tag} already exists at this commit; inspect or retry its tag pipeline")
+        return
+    request = urllib.request.Request(
+        f"https://api.github.com/repos/{repository}/git/refs",
+        data=json.dumps({"ref": f"refs/tags/{tag}", "sha": sha}).encode(),
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {token}",
+            "User-Agent": "hermes-omniroute-release-check",
+        },
+        method="POST",
+    )
+    # No overwrite, force, delete, or automatic POST retry. A lost response is safe
+    # to investigate/rerun because a same-commit tag is accepted above.
+    with urllib.request.urlopen(request, timeout=30) as response:
+        created = json.load(response)
+    if created.get("ref") != f"refs/tags/{tag}" or created.get("object", {}).get("sha") != sha:
+        raise ValueError("Tag creation response did not match the requested version/commit")
+    if remote_tag(root, tag) != sha:
+        raise ValueError("Created tag could not be verified; inspect it before retrying")
+    print(f"Created and verified {tag}; follow the tag-triggered pipeline for publication")
 
 
 def release_notes(root: Path, tag: str, repository: str) -> str:
@@ -118,14 +178,31 @@ def verify_release(data: dict, tag: str, title: str, notes: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["prepare", "verify"])
+    parser.add_argument("action", choices=["prepare", "verify", "prepare-manual", "create-tag"])
     args = parser.parse_args()
     root = Path.cwd()
-    tag = os.environ.get("CI_COMMIT_TAG", "")
+    manual = args.action in {"prepare-manual", "create-tag"}
+    tag = os.environ.get("RELEASE_VERSION" if manual else "CI_COMMIT_TAG", "")
     repository = os.environ.get("CI_REPO", "")
     notes = release_notes(root, tag, repository)
     title = f"Hermes OmniRoute {tag}"
-    if args.action == "prepare":
+    if manual:
+        if os.environ.get("CI_PIPELINE_EVENT") != "manual":
+            raise ValueError("Tag creation is only allowed from an explicit manual run")
+        sha = os.environ.get("CI_COMMIT_SHA", "")
+        validate_manual_source(
+            root,
+            tag,
+            sha,
+            os.environ.get("CI_COMMIT_REF", ""),
+            os.environ.get("CI_REPO_DEFAULT_BRANCH", "main"),
+        )
+        check_existing_release(repository, tag, notes)
+        if args.action == "create-tag":
+            request_tag(root, repository, tag, sha)
+        else:
+            print(f"Validated manual release {tag}; no tag or release created")
+    elif args.action == "prepare":
         validate_source(
             root,
             tag,
@@ -134,13 +211,7 @@ def main() -> None:
             os.environ.get("CI_REPO_DEFAULT_BRANCH", "main"),
         )
         # Refuse a conflicting existing release before the credentialed plugin runs.
-        try:
-            existing = fetch_release(repository, tag)
-        except urllib.error.HTTPError as error:
-            if error.code != 404:
-                raise
-        else:
-            verify_release(existing, tag, title, notes)
+        check_existing_release(repository, tag, notes)
         output = root / ".release"
         if output.is_symlink():
             raise ValueError("Release output directory must not be a symlink")

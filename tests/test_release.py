@@ -1,6 +1,8 @@
 """Offline release gates; Git fixtures use only temporary local repositories."""
 
 import importlib.util
+import io
+import json
 import os
 import shutil
 import subprocess
@@ -9,7 +11,7 @@ import tempfile
 import unittest
 import urllib.error
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("release_checks", ROOT / "scripts/release.py")
@@ -134,6 +136,100 @@ class ReleaseNotes(unittest.TestCase):
         ):
             release.main()
 
+    def test_manual_prepare_requires_manual_event_and_never_creates_a_tag(self):
+        env = {"RELEASE_VERSION": "v0.2.3", "CI_REPO": "example/integration"}
+        with (
+            patch.dict(os.environ, {**env, "CI_PIPELINE_EVENT": "push"}),
+            patch.object(sys, "argv", ["release.py", "create-tag"]),
+            patch.object(Path, "cwd", return_value=self.root),
+            patch.object(release, "request_tag") as write,
+            self.assertRaisesRegex(ValueError, "explicit manual"),
+        ):
+            release.main()
+        write.assert_not_called()
+        with (
+            patch.dict(os.environ, {**env, "CI_PIPELINE_EVENT": "manual"}),
+            patch.object(sys, "argv", ["release.py", "prepare-manual"]),
+            patch.object(Path, "cwd", return_value=self.root),
+            patch.object(release, "validate_manual_source"),
+            patch.object(release, "check_existing_release"),
+            patch.object(release, "request_tag") as write,
+        ):
+            release.main()
+        write.assert_not_called()
+
+    def test_manual_create_rechecks_source_and_release_conflicts_before_writing(self):
+        env = {
+            "RELEASE_VERSION": "v0.2.3",
+            "CI_REPO": "example/integration",
+            "CI_PIPELINE_EVENT": "manual",
+        }
+        for gate in ["validate_manual_source", "check_existing_release"]:
+            with (
+                self.subTest(gate=gate),
+                patch.dict(os.environ, env),
+                patch.object(sys, "argv", ["release.py", "create-tag"]),
+                patch.object(Path, "cwd", return_value=self.root),
+                patch.object(release, "validate_manual_source"),
+                patch.object(release, "check_existing_release"),
+                patch.object(release, gate, side_effect=ValueError("gate refused")),
+                patch.object(release, "request_tag") as write,
+                self.assertRaisesRegex(ValueError, "gate refused"),
+            ):
+                release.main()
+            write.assert_not_called()
+
+
+class ManualTagRequest(unittest.TestCase):
+    def test_tag_creation_is_one_verified_post_with_no_token_output(self):
+        sha = "a" * 40
+        reply = {"ref": "refs/tags/v1.0.0", "object": {"sha": sha}}
+        response = Mock()
+        response.__enter__ = Mock(return_value=io.StringIO(json.dumps(reply)))
+        response.__exit__ = Mock(return_value=False)
+        with (
+            patch.dict(os.environ, {"GITHUB_RELEASE_TOKEN": "synthetic-fixture-only"}),
+            patch.object(release, "remote_tag", side_effect=[None, sha]),
+            patch.object(release.urllib.request, "urlopen", return_value=response) as api,
+            patch("sys.stdout", new_callable=io.StringIO) as output,
+        ):
+            release.request_tag(Path("."), "example/integration", "v1.0.0", sha)
+        api.assert_called_once()
+        request = api.call_args.args[0]
+        self.assertEqual(request.method, "POST")
+        self.assertEqual(
+            request.full_url, "https://api.github.com/repos/example/integration/git/refs"
+        )
+        self.assertEqual(json.loads(request.data), {"ref": "refs/tags/v1.0.0", "sha": sha})
+        self.assertNotIn("synthetic-fixture-only", output.getvalue())
+
+    def test_existing_same_commit_tag_and_missing_secret_never_write(self):
+        sha = "a" * 40
+        with (
+            patch.dict(os.environ, {"GITHUB_RELEASE_TOKEN": "synthetic-fixture-only"}),
+            patch.object(release, "remote_tag", return_value=sha),
+            patch.object(release.urllib.request, "urlopen") as api,
+        ):
+            release.request_tag(Path("."), "example/integration", "v1.0.0", sha)
+        api.assert_not_called()
+        with (
+            patch.dict(os.environ, {"GITHUB_RELEASE_TOKEN": ""}),
+            patch.object(release.urllib.request, "urlopen") as api,
+            self.assertRaisesRegex(ValueError, "Missing Crow"),
+        ):
+            release.request_tag(Path("."), "example/integration", "v1.0.0", sha)
+        api.assert_not_called()
+
+    def test_tag_post_failure_is_not_retried(self):
+        with (
+            patch.dict(os.environ, {"GITHUB_RELEASE_TOKEN": "synthetic-fixture-only"}),
+            patch.object(release, "remote_tag", return_value=None),
+            patch.object(release.urllib.request, "urlopen", side_effect=TimeoutError) as api,
+            self.assertRaises(TimeoutError),
+        ):
+            release.request_tag(Path("."), "example/integration", "v1.0.0", "a" * 40)
+        api.assert_called_once()
+
 
 class ReleaseSource(unittest.TestCase):
     def setUp(self):
@@ -195,3 +291,21 @@ class ReleaseSource(unittest.TestCase):
     def test_non_tag_event_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "version-tag event"):
             release.validate_source(self.root, "v1.0.0", self.sha, "refs/heads/main", "main")
+
+    def test_manual_release_requires_latest_default_branch_and_preserves_tags(self):
+        release.validate_manual_source(self.root, "v1.0.0", self.sha, "refs/heads/main", "main")
+        for ref in ["refs/heads/feature", "refs/tags/v1.0.0"]:
+            with self.subTest(ref=ref), self.assertRaisesRegex(ValueError, "default branch"):
+                release.validate_manual_source(self.root, "v1.0.0", self.sha, ref, "main")
+        self.git("tag", "v1.0.0")
+        self.git("push", "origin", "v1.0.0")
+        release.validate_manual_source(self.root, "v1.0.0", self.sha, "refs/heads/main", "main")
+        (self.root / "example").write_text("next reviewed commit")
+        self.git("commit", "-am", "Next fixture")
+        new = self.git("rev-parse", "HEAD")
+        with self.assertRaisesRegex(ValueError, "advanced"):
+            release.validate_manual_source(self.root, "v1.0.1", new, "refs/heads/main", "main")
+        self.git("push", "origin", "main")
+        with self.assertRaisesRegex(ValueError, "never move"):
+            release.validate_manual_source(self.root, "v1.0.0", new, "refs/heads/main", "main")
+        release.validate_manual_source(self.root, "v1.0.1", new, "refs/heads/main", "main")
