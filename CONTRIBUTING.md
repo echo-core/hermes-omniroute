@@ -13,6 +13,8 @@ work. Open a PR to `dev`, run Crow checks, and verify changed runtime behavior i
 an explicitly authorized pilot profile before promoting it to `main`. Record the
 acceptance and any limitations in the PR; documentation-only changes do not need
 provider calls. Do not use paid/live tests without a separately approved budget.
+Use the [development testing guide](docs/testing-dev.md) for the user-facing
+pin/install/test/return-to-stable process.
 
 Prepare one new bundle version, changelog entry and reviewed notes in `dev` for
 each promotion. Open a separate `dev` → `main` PR. Crow checks that the source
