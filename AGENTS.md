@@ -17,10 +17,16 @@ deployment identities and hosts belong in external deployment records.
 
 ## Repository checks
 
-Work on a feature branch and submit a pull request; never commit or push directly
-to main/master. Fetch origin/main before creating each feature branch and again
-before opening its PR. Start from current origin/main and keep commits focused;
-avoid merge commits just to synchronize branches. Preserve the no-force-push rule. Use Conventional Commit messages with a short explanatory body.
+Use feature branches → dev → main. Main is the stable channel; dev is bleeding
+edge. Never commit or push directly to main, master or dev. Fetch origin before
+branching: base development features on current origin/dev; fetch the target base
+again before opening a PR. Feature PRs target dev. Promote dev to main through a
+separate PR only after checks and scoped runtime acceptance for changed behavior;
+documentation-only changes can mark runtime acceptance not applicable. Each main
+promotion prepares a new bundle version, changelog and release notes; Crow creates
+the tag and publishes automatically after the merge. Keep commits focused, avoid
+merge commits just to synchronize branches, and never force-push. Use Conventional
+Commit messages with short explanatory bodies. Keep identities out of public docs.
 Read CONTRIBUTING.md and install prek before committing. Keep all remote hooks frozen to full commit SHAs;
 update them deliberately with prek update --freeze and review the resulting diff.
 Use `uv sync --locked` and `uv run --locked prek install --force` for setup.
