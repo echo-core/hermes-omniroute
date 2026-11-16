@@ -25,7 +25,7 @@ class ReleaseNotes(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         for name in [
-            "docs/releases/v0.2.3.md",
+            "docs/releases/v0.1.0.md",
             "CHANGELOG.md",
             "README.md",
             "model-provider/plugin.yaml",
@@ -35,16 +35,16 @@ class ReleaseNotes(unittest.TestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / name, target)
 
-    def notes(self, tag="v0.2.3", repo="example/integration"):
+    def notes(self, tag="v0.1.0", repo="example/integration"):
         return release.release_notes(self.root, tag, repo)
 
     def test_curated_notes_keep_features_and_resolve_repository_links(self):
         text = self.notes()
         self.assertIn("Regular and Complex", text)
         self.assertIn(
-            "https://github.com/example/integration/blob/v0.2.3/README.md#configure", text
+            "https://github.com/example/integration/blob/v0.1.0/README.md#configure", text
         )
-        self.assertIn("https://github.com/example/integration/blob/v0.2.3/CHANGELOG.md", text)
+        self.assertIn("https://github.com/example/integration/blob/v0.1.0/CHANGELOG.md", text)
         self.assertNotIn("../../README.md", text)
 
     def test_unsafe_or_unstable_tags_and_repository_names_are_rejected(self):
@@ -62,12 +62,12 @@ class ReleaseNotes(unittest.TestCase):
 
     def test_versioned_changelog_is_required(self):
         p = self.root / "CHANGELOG.md"
-        p.write_text(p.read_text().replace("## v0.2.3", "## Unreleased candidate"))
+        p.write_text(p.read_text().replace("## v0.1.0", "## Unreleased candidate"))
         with self.assertRaisesRegex(ValueError, "changelog"):
             self.notes()
 
     def test_draft_notes_and_missing_relative_links_are_rejected(self):
-        p = self.root / "docs/releases/v0.2.3.md"
+        p = self.root / "docs/releases/v0.1.0.md"
         original = p.read_text()
         p.write_text(original + "\nPublication is pending.\n")
         with self.assertRaisesRegex(ValueError, "Finalize"):
@@ -77,7 +77,7 @@ class ReleaseNotes(unittest.TestCase):
             self.notes()
 
     def test_cli_prepares_artifacts_only_after_source_and_existing_release_checks(self):
-        env = {"CI_COMMIT_TAG": "v0.2.3", "CI_REPO": "example/integration"}
+        env = {"CI_COMMIT_TAG": "v0.1.0", "CI_REPO": "example/integration"}
         missing = urllib.error.HTTPError("https://api.github.com/", 404, "absent", {}, None)
         with (
             patch.dict(os.environ, env),
@@ -88,13 +88,13 @@ class ReleaseNotes(unittest.TestCase):
         ):
             release.main()
         source.assert_called_once()
-        self.assertEqual((self.root / ".release/title.txt").read_text(), "Hermes OmniRoute v0.2.3")
+        self.assertEqual((self.root / ".release/title.txt").read_text(), "Hermes OmniRoute v0.1.0")
         self.assertEqual((self.root / ".release/notes.md").read_text(), self.notes())
 
     def test_public_api_failure_does_not_prepare_publication(self):
         forbidden = urllib.error.HTTPError("https://api.github.com/", 403, "denied", {}, None)
         with (
-            patch.dict(os.environ, {"CI_COMMIT_TAG": "v0.2.3", "CI_REPO": "example/integration"}),
+            patch.dict(os.environ, {"CI_COMMIT_TAG": "v0.1.0", "CI_REPO": "example/integration"}),
             patch.object(sys, "argv", ["release.py", "prepare"]),
             patch.object(Path, "cwd", return_value=self.root),
             patch.object(release, "validate_source"),
@@ -106,13 +106,13 @@ class ReleaseNotes(unittest.TestCase):
 
     def test_existing_release_conflicts_fail_without_overwriting(self):
         valid = {
-            "tag_name": "v0.2.3",
-            "name": "Hermes OmniRoute v0.2.3",
+            "tag_name": "v0.1.0",
+            "name": "Hermes OmniRoute v0.1.0",
             "body": self.notes(),
             "draft": False,
             "prerelease": False,
         }
-        release.verify_release(valid, "v0.2.3", valid["name"], self.notes())
+        release.verify_release(valid, "v0.1.0", valid["name"], self.notes())
         for key, value in [
             ("tag_name", "v0.2.2"),
             ("name", "other"),
@@ -121,13 +121,13 @@ class ReleaseNotes(unittest.TestCase):
             ("prerelease", True),
         ]:
             with self.subTest(field=key), self.assertRaises(ValueError):
-                release.verify_release({**valid, key: value}, "v0.2.3", valid["name"], self.notes())
+                release.verify_release({**valid, key: value}, "v0.1.0", valid["name"], self.notes())
 
     def test_output_directory_symlink_is_rejected(self):
         (self.root / ".release").symlink_to(self.root / "docs", target_is_directory=True)
         missing = urllib.error.HTTPError("https://api.github.com/", 404, "absent", {}, None)
         with (
-            patch.dict(os.environ, {"CI_COMMIT_TAG": "v0.2.3", "CI_REPO": "example/integration"}),
+            patch.dict(os.environ, {"CI_COMMIT_TAG": "v0.1.0", "CI_REPO": "example/integration"}),
             patch.object(sys, "argv", ["release.py", "prepare"]),
             patch.object(Path, "cwd", return_value=self.root),
             patch.object(release, "validate_source"),
@@ -137,7 +137,7 @@ class ReleaseNotes(unittest.TestCase):
             release.main()
 
     def test_manual_prepare_requires_manual_event_and_never_creates_a_tag(self):
-        env = {"RELEASE_VERSION": "v0.2.3", "CI_REPO": "example/integration"}
+        env = {"RELEASE_VERSION": "v0.1.0", "CI_REPO": "example/integration"}
         with (
             patch.dict(os.environ, {**env, "CI_PIPELINE_EVENT": "push"}),
             patch.object(sys, "argv", ["release.py", "create-tag"]),
@@ -160,7 +160,7 @@ class ReleaseNotes(unittest.TestCase):
 
     def test_manual_create_rechecks_source_and_release_conflicts_before_writing(self):
         env = {
-            "RELEASE_VERSION": "v0.2.3",
+            "RELEASE_VERSION": "v0.1.0",
             "CI_REPO": "example/integration",
             "CI_PIPELINE_EVENT": "manual",
         }
