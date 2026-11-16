@@ -1,6 +1,6 @@
 # Hermes OmniRoute
 
-[![status-badge](https://ci.echols.co/api/v1/badges/5/status.svg)](https://ci.echols.co/repos/5)
+[![Build Status](https://ci.echols.co/api/v1/badges/5/status.svg)](https://ci.echols.co/repos/5)
 
 Use your OmniRoute gateway for Hermes chat models, image generation, web search
 and page extraction. Your gateway manages provider accounts and routing; Hermes
