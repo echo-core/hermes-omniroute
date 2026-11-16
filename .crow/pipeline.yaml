@@ -8,6 +8,9 @@ variables:
 steps:
   - name: checks
     image: *python_image
+    environment:
+      UV_LINK_MODE: copy
+      DEBIAN_FRONTEND: noninteractive
     commands:
       - apt-get update
       - apt-get install -y --no-install-recommends git
@@ -22,7 +25,7 @@ steps:
         ref: refs/tags/v*
     commands:
       - apt-get update
-      - apt-get install -y --no-install-recommends git
+      - DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git
       - python scripts/release.py prepare
 
   - name: publish-release
