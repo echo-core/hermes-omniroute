@@ -179,6 +179,124 @@ class ReleaseNotes(unittest.TestCase):
                 release.main()
             write.assert_not_called()
 
+    def test_bundle_version_is_selected_from_changelog_not_environment(self):
+        self.assertEqual(release.planned_release(self.root), "v0.1.0")
+        p = self.root / "CHANGELOG.md"
+        p.write_text(p.read_text().replace("## v0.1.0", "## v0.1.0-rc1"))
+        with self.assertRaisesRegex(ValueError, "stable versioned"):
+            release.planned_release(self.root)
+
+    def test_promotion_requires_dev_to_main_and_never_writes(self):
+        env = {
+            "CI_REPO": "example/integration",
+            "CI_PIPELINE_EVENT": "pull_request",
+            "CI_COMMIT_SOURCE_BRANCH": "dev",
+            "CI_COMMIT_TARGET_BRANCH": "main",
+            "CI_REPO_DEFAULT_BRANCH": "main",
+        }
+        for change in [
+            {"CI_PIPELINE_EVENT": "push"},
+            {"CI_COMMIT_SOURCE_BRANCH": "feature"},
+            {"CI_COMMIT_TARGET_BRANCH": "dev"},
+        ]:
+            with (
+                self.subTest(change=change),
+                patch.dict(os.environ, {**env, **change}, clear=True),
+                patch.object(sys, "argv", ["release.py", "check-promotion"]),
+                patch.object(Path, "cwd", return_value=self.root),
+                patch.object(release, "request_tag") as write,
+                self.assertRaisesRegex(ValueError, "from dev"),
+            ):
+                release.main()
+            write.assert_not_called()
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch.object(sys, "argv", ["release.py", "check-promotion"]),
+            patch.object(Path, "cwd", return_value=self.root),
+            patch.object(release, "validate_new_release") as version,
+            patch.object(release, "check_existing_release"),
+            patch.object(release, "request_tag") as write,
+        ):
+            release.main()
+        version.assert_called_once_with(self.root, "v0.1.0")
+        write.assert_not_called()
+
+    def test_auto_release_rejects_other_events_before_write(self):
+        for event in ["manual", "pull_request", "tag"]:
+            with (
+                self.subTest(event=event),
+                patch.dict(
+                    os.environ,
+                    {"CI_PIPELINE_EVENT": event, "CI_REPO": "example/integration"},
+                    clear=True,
+                ),
+                patch.object(sys, "argv", ["release.py", "create-auto-tag"]),
+                patch.object(Path, "cwd", return_value=self.root),
+                patch.object(release, "request_tag") as write,
+                self.assertRaisesRegex(ValueError, "default-branch push"),
+            ):
+                release.main()
+            write.assert_not_called()
+
+    def test_auto_prepare_and_create_use_current_main_and_planned_version(self):
+        sha = "a" * 40
+        env = {
+            "CI_REPO": "example/integration",
+            "CI_PIPELINE_EVENT": "push",
+            "CI_COMMIT_SHA": sha,
+            "CI_COMMIT_REF": "refs/heads/main",
+            "CI_REPO_DEFAULT_BRANCH": "main",
+            "RELEASE_VERSION": "v9.9.9",
+        }
+        for action in ["prepare-auto", "create-auto-tag"]:
+            with (
+                self.subTest(action=action),
+                patch.dict(os.environ, env, clear=True),
+                patch.object(sys, "argv", ["release.py", action]),
+                patch.object(Path, "cwd", return_value=self.root),
+                patch.object(release, "validate_manual_source") as source,
+                patch.object(release, "validate_new_release") as version,
+                patch.object(release, "check_existing_release"),
+                patch.object(release, "request_tag") as write,
+            ):
+                release.main()
+            source.assert_called_once_with(self.root, "v0.1.0", sha, "refs/heads/main", "main")
+            version.assert_called_once_with(self.root, "v0.1.0", sha)
+            if action == "create-auto-tag":
+                write.assert_called_once_with(self.root, "example/integration", "v0.1.0", sha)
+            else:
+                write.assert_not_called()
+
+    def test_auto_source_version_and_existing_release_failures_never_write(self):
+        env = {"CI_REPO": "example/integration", "CI_PIPELINE_EVENT": "push"}
+        for gate in ["validate_manual_source", "validate_new_release", "check_existing_release"]:
+            with (
+                self.subTest(gate=gate),
+                patch.dict(os.environ, env, clear=True),
+                patch.object(sys, "argv", ["release.py", "create-auto-tag"]),
+                patch.object(Path, "cwd", return_value=self.root),
+                patch.object(release, "validate_manual_source"),
+                patch.object(release, "validate_new_release"),
+                patch.object(release, "check_existing_release"),
+                patch.object(release, gate, side_effect=ValueError("gate refused")),
+                patch.object(release, "request_tag") as write,
+                self.assertRaisesRegex(ValueError, "gate refused"),
+            ):
+                release.main()
+            write.assert_not_called()
+
+    def test_new_bundle_versions_must_advance_but_same_commit_retries_are_safe(self):
+        tags = f"{'a' * 40}\trefs/tags/v0.1.0\n{'b' * 40}\trefs/tags/v0.2.0"
+        with patch.object(release, "git", return_value=tags):
+            for tag in ["v0.0.9", "v0.1.0", "v0.2.0"]:
+                with self.subTest(tag=tag), self.assertRaisesRegex(ValueError, "new version"):
+                    release.validate_new_release(self.root, tag)
+            release.validate_new_release(self.root, "v0.2.1")
+            with patch.object(release, "remote_tag", return_value="b" * 40):
+                release.validate_new_release(self.root, "v0.2.0", "b" * 40)
+                with self.assertRaisesRegex(ValueError, "new version"):
+                    release.validate_new_release(self.root, "v0.1.0", "b" * 40)
+
 
 class ManualTagRequest(unittest.TestCase):
     def test_tag_creation_is_one_verified_post_with_no_token_output(self):
