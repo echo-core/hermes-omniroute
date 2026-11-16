@@ -17,6 +17,42 @@ steps:
       - uv sync --locked
       - SKIP=no-commit-to-branch uv run --locked --offline prek run --all-files --stage manual
 
+  - name: check-stable-promotion
+    image: *python_image
+    depends_on: [checks]
+    when:
+      - event: pull_request
+        branch: ${CI_REPO_DEFAULT_BRANCH}
+    commands:
+      - apt-get update
+      - DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git
+      - python scripts/release.py check-promotion
+
+  - name: prepare-auto-release
+    image: *python_image
+    depends_on: [checks]
+    when:
+      - event: push
+        branch: ${CI_REPO_DEFAULT_BRANCH}
+    commands:
+      - apt-get update
+      - DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git
+      - python scripts/release.py prepare-auto
+
+  - name: create-auto-release-tag
+    image: *python_image
+    depends_on: [prepare-auto-release]
+    when:
+      - event: push
+        branch: ${CI_REPO_DEFAULT_BRANCH}
+    environment:
+      GITHUB_RELEASE_TOKEN:
+        from_secret: github_release_token  # pragma: allowlist secret
+    commands:
+      - apt-get update
+      - DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git
+      - python scripts/release.py create-auto-tag
+
   - name: prepare-release
     image: *python_image
     depends_on: [checks]

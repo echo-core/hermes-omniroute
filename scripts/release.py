@@ -61,14 +61,35 @@ def validate_manual_source(root: Path, tag: str, sha: str, ref: str, branch: str
     if not TAG.fullmatch(tag) or not re.fullmatch(r"[0-9a-f]{40}", sha):
         raise ValueError("Expected a stable version and exact commit SHA")
     if ref != f"refs/heads/{branch}" or git(root, "rev-parse", "HEAD") != sha:
-        raise ValueError("Manual releases must use the checked-out default branch")
+        raise ValueError("Releases must use the checked-out default branch")
     git(root, "check-ref-format", f"refs/heads/{branch}")
     refs = git(root, "ls-remote", "--exit-code", "origin", f"refs/heads/{branch}")
     if refs.split()[0] != sha:
-        raise ValueError("Default branch advanced; start a new manual run from its latest commit")
+        raise ValueError("Default branch advanced; start a new run from its latest commit")
     target = remote_tag(root, tag)
     if target is not None and target != sha:
         raise ValueError("Existing version tag points to another commit; never move a release tag")
+
+
+def planned_release(root: Path) -> str:
+    headings = re.findall(r"^## (v[^\n]+)$", (root / "CHANGELOG.md").read_text(), re.M)
+    if not headings or not TAG.fullmatch(headings[0]):
+        raise ValueError("Prepare a stable versioned changelog entry before promoting to main")
+    return headings[0]
+
+
+def validate_new_release(root: Path, tag: str, sha: str | None = None) -> None:
+    refs = git(root, "ls-remote", "--tags", "origin", "refs/tags/v*")
+    version = tuple(map(int, tag[1:].split(".")))
+    for line in refs.splitlines():
+        _target, ref = line.split()
+        existing = ref.removeprefix("refs/tags/")
+        if not TAG.fullmatch(existing):
+            continue
+        if existing == tag and sha and remote_tag(root, tag) == sha:
+            continue  # A retry of this exact main commit never creates another tag.
+        if tuple(map(int, existing[1:].split("."))) >= version:
+            raise ValueError("Prepare a new version greater than all existing stable tags")
 
 
 def check_existing_release(repository: str, tag: str, notes: str) -> None:
@@ -85,7 +106,7 @@ def request_tag(root: Path, repository: str, tag: str, sha: str) -> None:
     # This is the only credentialed helper operation: create one immutable tag.
     token = os.environ.get("GITHUB_RELEASE_TOKEN", "")
     if not token:
-        raise ValueError("Missing Crow publishing secret for manual tag creation")
+        raise ValueError("Missing Crow publishing secret for tag creation")
     if remote_tag(root, tag) == sha:
         print(f"Tag {tag} already exists at this commit; inspect or retry its tag pipeline")
         return
@@ -178,15 +199,62 @@ def verify_release(data: dict, tag: str, title: str, notes: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["prepare", "verify", "prepare-manual", "create-tag"])
+    parser.add_argument(
+        "action",
+        choices=[
+            "prepare",
+            "verify",
+            "prepare-manual",
+            "create-tag",
+            "check-promotion",
+            "prepare-auto",
+            "create-auto-tag",
+        ],
+    )
     args = parser.parse_args()
     root = Path.cwd()
     manual = args.action in {"prepare-manual", "create-tag"}
-    tag = os.environ.get("RELEASE_VERSION" if manual else "CI_COMMIT_TAG", "")
+    automatic = args.action in {"prepare-auto", "create-auto-tag"}
+    promotion = args.action == "check-promotion"
+    tag = (
+        planned_release(root)
+        if automatic or promotion
+        else os.environ.get("RELEASE_VERSION" if manual else "CI_COMMIT_TAG", "")
+    )
     repository = os.environ.get("CI_REPO", "")
     notes = release_notes(root, tag, repository)
     title = f"Hermes OmniRoute {tag}"
-    if manual:
+    if promotion:
+        if (
+            os.environ.get("CI_PIPELINE_EVENT") != "pull_request"
+            or os.environ.get("CI_COMMIT_SOURCE_BRANCH") != "dev"
+            or os.environ.get("CI_COMMIT_TARGET_BRANCH")
+            != os.environ.get("CI_REPO_DEFAULT_BRANCH", "main")
+        ):
+            raise ValueError(
+                "Stable promotions must be pull requests from dev to the default branch"
+            )
+        validate_new_release(root, tag)
+        check_existing_release(repository, tag, notes)
+        print(f"Validated dev promotion for {tag}; no tag or release created")
+    elif automatic:
+        if os.environ.get("CI_PIPELINE_EVENT") != "push":
+            raise ValueError("Automatic releases require a default-branch push")
+        sha = os.environ.get("CI_COMMIT_SHA", "")
+        validate_manual_source(
+            root,
+            tag,
+            sha,
+            os.environ.get("CI_COMMIT_REF", ""),
+            os.environ.get("CI_REPO_DEFAULT_BRANCH", "main"),
+        )
+        validate_new_release(root, tag, sha)
+        check_existing_release(repository, tag, notes)
+        if args.action == "create-auto-tag":
+            request_tag(root, repository, tag, sha)
+        else:
+            print(f"Validated automatic release {tag}; no tag or release created")
+    elif manual:
         if os.environ.get("CI_PIPELINE_EVENT") != "manual":
             raise ValueError("Tag creation is only allowed from an explicit manual run")
         sha = os.environ.get("CI_COMMIT_SHA", "")
