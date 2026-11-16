@@ -193,6 +193,8 @@ those accepted snapshots; updates do not wait for GitHub release publication.
 Bleeding-edge testing is an explicit choice: use the full commit SHA from `dev`
 with Hermes's `--ref` option. That install stays pinned until deliberately changed;
 `--ref dev` and release tag names are not supported in Hermes 0.23.1.
+See [Test the development version](docs/testing-dev.md) for choosing a checked
+commit, using a separate test profile, trying updates and returning to stable.
 
 Update both plugins in the same profile where you installed them:
 
