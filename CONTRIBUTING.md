@@ -80,8 +80,55 @@ uv run --locked prek run --all-files --stage manual
 
 Use `uv add --dev` to add dependencies or deliberately change their version ranges.
 Review both `pyproject.toml` and `uv.lock`. The lockfile hook rejects stale locks;
-keep it and the offline-test hook enabled for your local checks. No CI service
-is required by this setup.
+keep it and the offline-test hook enabled for your local checks. Local checks work
+independently of the Crow workflow.
 
 Keep paid/live provider calls out of the default hooks. Live acceptance
 requires a separate explicit budget and selected-profile authorization.
+
+## Crow checks and releases
+
+The workflow in `.crow/pipeline.yaml` follows the same checks as local development.
+PRs, pushes and manual runs execute locked uv/prek checks without a publishing
+credential. Version tags additionally prepare, publish and verify a GitHub release
+through the Crow-compatible [Git Release plugin](https://woodpecker-ci.org/plugins/release).
+The workflow images are pinned by version and digest.
+
+For a stable release:
+
+1. Add the versioned changelog entry and `docs/releases/vX.Y.Z.md` in a PR. Include
+   the exact version of each native plugin; their versions need not be identical.
+2. Merge the reviewed PR and fetch the latest `main` before selecting its commit.
+3. Create and push the approved `vX.Y.Z` tag on that commit. Crow validates that the
+   remote tag matches the pipeline checkout and belongs to the default branch.
+4. Crow runs the existing checks, prepares the notes, publishes the GitHub Release
+   with the plugin, then verifies its title, tag and notes. No manual GitHub release
+   creation is needed. Source archives are provided by GitHub.
+
+Only stable `vMAJOR.MINOR.PATCH` tags are supported. Missing or unfinished notes,
+manifest/version-matrix differences, unmerged source and conflicting existing
+release metadata stop publication. Retries preserve an identical existing release;
+the plugin does not overwrite notes or upload extra artifacts. Release-note links
+are rewritten to the tagged source so they work on the GitHub Releases page.
+
+### Crow repository setup
+
+Enable the repository in Crow and use the existing webhook with the default
+`.crow/` configuration directory. Provide a repository-scoped secret named
+`github_release_token`, using a GitHub fine-grained token with **Contents: read and
+write** for this repository only. Restrict the secret to the **tag** event and the
+exact pinned release-plugin image in `.crow/pipeline.yaml`; no other step needs
+that token. Keep it out of PR events, source files and logs. A webhook alone does
+not configure the repository or provide its publishing credential.
+
+Only the `publish-release` step references the credential, using plugin settings
+without custom commands. Note preparation and verification use unauthenticated
+public GitHub reads; an API outage or rate limit fails the job visibly. If publishing
+succeeded before a later verification failure, retry the original tag pipeline;
+do not move the tag or manually overwrite the release.
+
+Run `crow lint --strict .crow/` with a CLI matching the server before changing the
+workflow. The release helper and its negative-path tests run in the normal offline
+suite; no live publishing credential or provider calls are used by those tests.
+Publishing a GitHub Release leaves Hermes's ordinary Git updates and optional
+full-SHA pinning unchanged.
