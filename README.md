@@ -13,8 +13,9 @@ This repository installs **two plugins**:
 | `hermes-omniroute-provider` | Adds OmniRoute to the model picker, loads the gateway's model list and discovers context limits automatically. |
 | `hermes-omniroute-backend` | Adds Regular and Complex image generation, web search and page extraction. |
 
-Two entries are expected: Hermes currently loads model providers separately from
-plugins that provide tools. See the [design notes](docs/design.md) for details.
+Hermes currently loads model providers separately from plugins that provide
+tools. The [unified plugin roadmap](docs/design.md#unified-plugin-roadmap)
+describes how the two packages will become one once Hermes ships support.
 
 Tested with **Hermes v0.23.1** and **OmniRoute 3.8.54**. Voice and video are outside
 this integration's current capabilities.

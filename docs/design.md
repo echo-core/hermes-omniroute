@@ -8,10 +8,45 @@ the explicit Complex image tool, and web search/extraction through PluginContext
 Each package has one manifest and one native update/uninstall lifecycle. Internal
 backend modules share its installed identity and profile scope.
 
-A single combined identity remains a future target tracked in
-[Hermes155799](https://github.com/NousResearch/hermes-agent/issues/155799).
-[Native compatibility evidence](native-model-backend-proposal.md) explains the
-separate loaders on v0.23.1. The approved two-plugin deployment uses those loaders.
+## Unified plugin roadmap
+
+The goal is one native install, one OmniRoute entry in the Hermes plugin UI,
+and one enable, update, disable and uninstall lifecycle per profile. The plugin
+will include model discovery and dynamic context, Regular and Complex image
+generation, web search and page extraction. The two packages remain the
+supported installation while Hermes adds a shared lifecycle.
+[Hermes issue #155799](https://github.com/NousResearch/hermes-agent/issues/155799)
+tracks that support. The [native compatibility notes](native-model-backend-proposal.md)
+document the separate loaders and the original reproduction.
+
+1. **Confirm support in a Hermes release.** Identify the released version and
+   supported registration API that let one plugin own a model provider and
+   backend tools under the same profile and lifecycle. An issue closure or a
+   merged change is only a signal to check the release.
+2. **Combine the adapters.** Give the existing model, image and web adapters a
+   single manifest and installed identity. Preserve provider and tool names,
+   profile configuration and keys, the Auto catalog, dynamic context and
+   auxiliary routing. Update the release checks and notes for the new package
+   layout. Keep the existing subdirectory sources available during migration so
+   installed clients can continue to update.
+3. **Verify the lifecycle and isolation.** On the supported Hermes version,
+   exercise install, update, disable, re-enable and uninstall, including cleanup
+   on partial failure. Check early model discovery and one rendered plugin UI
+   entry. In two test profiles sharing a gateway URL, use distinct dummy keys,
+   model catalogs and context limits to check registration and cache isolation.
+   Cover the supported execution modes and the feature checks in
+   [Acceptance](#acceptance).
+4. **Pilot the migration and rollback.** Record both existing plugin revisions
+   and profile selections. In one opt-in profile, use native management to switch
+   from the pair to the unified plugin with one active registration per capability.
+   Check startup warnings and verify the model picker, images, search and
+   extraction in a fresh chat. Exercise rollback by removing the unified plugin
+   and restoring the recorded pair and selections. Paid tests require an explicit
+   budget.
+5. **Publish migration instructions with the first unified release.** State the
+   minimum Hermes version, how existing users switch, how to roll back, and which
+   releases support the two-package install. Make the unified install the default
+   after pilot acceptance. Keep migration an explicit choice for existing profiles.
 
 ## Profile configuration
 
