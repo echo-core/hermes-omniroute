@@ -102,6 +102,7 @@ def _bind_profile(monkeypatch, base, key, *, chat_key=None):
     client = SimpleNamespace(
         api_key=chat_key or key,
         base_url=base + "/",
+        auth_headers={"Authorization": f"Bearer {chat_key or key}"},
         default_headers={"Authorization": f"Bearer {chat_key or key}"},
     )
     agent = SimpleNamespace(client=client, provider="omniroute")
@@ -218,6 +219,7 @@ def test_chat_key_and_endpoint_must_match_current_profile(monkeypatch, mock_http
     with pytest.raises(gateway.RoutingError, match="different"):
         gateway.Gateway.from_profile(expected_base_url=BASE_A)
     client.default_headers["Authorization"] = f"Bearer {PROFILE_A}"
+    client.auth_headers["Authorization"] = f"Bearer {PROFILE_A}"
     with pytest.raises(gateway.RoutingError, match="different"):
         gateway.Gateway.from_profile(expected_base_url=BASE_B)
     assert calls == []
@@ -300,7 +302,43 @@ def test_effective_credential_rotation_changes_identity_on_shared_gateway(monkey
 
     client.api_key = PROFILE_B
     client.default_headers["Authorization"] = f"Bearer {PROFILE_B}"
+    client.auth_headers["Authorization"] = f"Bearer {PROFILE_B}"
     assert transport.identity != gateway.Gateway.active_identity(expected_base_url=BASE_A)
+    with pytest.raises(gateway.RoutingError) as failure:
+        gateway.Gateway.from_profile(expected_base_url=BASE_A)
+    assert failure.value.reason == "chat_identity_mismatch"
+    assert calls == []
+
+
+def test_scoped_bearer_can_be_supplied_by_sdk_separately_from_defaults(monkeypatch):
+    client = _bind_profile(monkeypatch, BASE_A, PROFILE_A)
+    client.default_headers = {"User-Agent": "synthetic-sdk"}
+    transport = gateway.Gateway.from_profile(expected_base_url=BASE_A)
+    assert transport.identity == gateway.Gateway.active_identity(expected_base_url=BASE_A)
+
+
+@pytest.mark.parametrize(
+    "default_headers,auth_headers,overrides",
+    [
+        ({"Authorization": object()}, {"Authorization": f"Bearer {PROFILE_A}"}, {}),
+        ({"Authorization": "Basic synthetic"}, {"Authorization": f"Bearer {PROFILE_A}"}, {}),
+        ({"authorization": f"Bearer {PROFILE_A}"}, {"Authorization": f"Bearer {PROFILE_A}"}, {}),
+        ({}, {}, {}),
+        ({"Authorization": f"Bearer {PROFILE_A}"}, {}, {}),
+        ({}, {"Authorization": f"Bearer {PROFILE_A}"}, {"_api_key_provider": lambda: PROFILE_B}),
+        ({}, {"Authorization": f"Bearer {PROFILE_A}"}, {"custom_auth": object()}),
+        ({}, {"Authorization": f"Bearer {PROFILE_A}"}, {"_client": SimpleNamespace(auth=object())}),
+    ],
+)
+def test_unsafe_sdk_authentication_uses_original_combo(
+    monkeypatch, mock_http, default_headers, auth_headers, overrides
+):
+    calls, _ = mock_http
+    client = _bind_profile(monkeypatch, BASE_A, PROFILE_A)
+    client.default_headers = default_headers
+    client.auth_headers = auth_headers
+    for name, value in overrides.items():
+        setattr(client, name, value)
     with pytest.raises(gateway.RoutingError) as failure:
         gateway.Gateway.from_profile(expected_base_url=BASE_A)
     assert failure.value.reason == "chat_identity_mismatch"

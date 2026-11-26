@@ -192,7 +192,10 @@ def probe(root):
     ):
         key = client_key or f"fixture-key-{home.name}"
         client = SimpleNamespace(
-            api_key=key, base_url=BASE + "/", default_headers={"Authorization": f"Bearer {key}"}
+            api_key=key,
+            base_url=BASE + "/",
+            auth_headers={"Authorization": f"Bearer {key}"},
+            default_headers={},
         )
         payload = {
             "model": model,

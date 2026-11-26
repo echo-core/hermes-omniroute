@@ -124,6 +124,28 @@ def _identity(base_url: str, key: str) -> tuple[str, bytes]:
     return base_url, sha256(key.encode()).digest()
 
 
+def _uses_scoped_bearer(client, key: str) -> bool:
+    # Chat Completions adds the SDK bearer separately from default_headers in
+    # newer SDKs. Older SDKs already include that same header in the defaults.
+    auth = client.auth_headers
+    defaults = client.default_headers
+    if not isinstance(auth, Mapping) or not isinstance(defaults, Mapping):
+        return False
+    authorization = {
+        name: value for name, value in auth.items() if name.casefold() == "authorization"
+    }
+    if authorization != {"Authorization": f"Bearer {key}"}:
+        return False
+    merged = {**authorization, **defaults}
+    wire_auth = [val for name, val in merged.items() if name.casefold() == "authorization"]
+    return (
+        wire_auth == [f"Bearer {key}"]
+        and getattr(client, "_api_key_provider", None) is None
+        and getattr(client, "custom_auth", None) is None
+        and getattr(getattr(client, "_client", None), "auth", None) is None
+    )
+
+
 def _active_chat(expected_base_url: str) -> tuple[str, bytes]:
     # Hermes 0.23.4 binds the effective agent across its in-process main turn.
     # A separate plugin host has no such binding and must pass through.
@@ -137,15 +159,10 @@ def _active_chat(expected_base_url: str) -> tuple[str, bytes]:
             "chat_identity_unavailable", "The active chat credential is unavailable."
         )
     base_url = _gateway_url(expected_base_url)
-    headers = [
-        value
-        for name, value in client.default_headers.items()
-        if name.casefold() == "authorization"
-    ]
     if (
         getattr(agent, "provider", None) != "omniroute"
         or _gateway_url(str(getattr(client, "base_url", ""))) != base_url
-        or headers != [f"Bearer {key}"]
+        or not _uses_scoped_bearer(client, key)
     ):
         raise RoutingError(
             "chat_identity_mismatch", "The active chat uses different OmniRoute credentials."
