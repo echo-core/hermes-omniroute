@@ -10,6 +10,7 @@ import json
 import os
 import shutil
 import tempfile
+from collections import deque
 from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import urlsplit
@@ -24,8 +25,17 @@ ROUTES = {
 }
 FIRST_CLASSIFIER = "ollama-local/fixture-one"
 SECOND_CLASSIFIER = "ollama-local/fixture-two"
-TOOL = "fixture_repair"
-PHASES = ("inspect", "repair", "verify")
+TOOL = "terminal"
+PRIVATE_ARGUMENT = "PRIVATE_FIXTURE_ARGUMENT"
+PRIVATE_OUTPUT = "PRIVATE_FIXTURE_OUTPUT"
+INSPECT = f"check parser fixture {PRIVATE_ARGUMENT}"
+REPAIR = "apply parser fixture repair"
+VERIFY = "verify parser fixture"
+TOOL_RESULTS = {
+    INSPECT: {"exit_code": 1, "status": "error"},
+    REPAIR: {"exit_code": 0, "status": "success"},
+    VERIFY: {"exit_code": 0, "status": "success"},
+}
 TOOL_SCHEMA = {
     "type": "function",
     "function": {
@@ -33,8 +43,8 @@ TOOL_SCHEMA = {
         "description": "Run a fixture repair phase",
         "parameters": {
             "type": "object",
-            "properties": {"phase": {"type": "string", "enum": list(PHASES)}},
-            "required": ["phase"],
+            "properties": {"command": {"type": "string", "enum": list(TOOL_RESULTS)}},
+            "required": ["command"],
         },
     },
 }
@@ -60,7 +70,7 @@ def _sse(model, chunks):
     )
 
 
-def _tool_chunks(index, phase):
+def _tool_chunks(index, command):
     return [
         (
             {
@@ -70,15 +80,22 @@ def _tool_chunks(index, phase):
                         "index": 0,
                         "id": f"call_fixture_{index}",
                         "type": "function",
-                        "function": {"name": TOOL, "arguments": '{"phase":"'},
+                        "function": {"name": TOOL, "arguments": '{"command":'},
                     }
                 ],
             },
             None,
         ),
-        ({"tool_calls": [{"index": 0, "function": {"arguments": phase + '"}'}}]}, None),
+        (
+            {"tool_calls": [{"index": 0, "function": {"arguments": json.dumps(command) + "}"}}]},
+            None,
+        ),
         ({}, "tool_calls"),
     ]
+
+
+def _text_chunks(answer):
+    return [({"role": "assistant", "content": answer}, None), ({}, "stop")]
 
 
 def _probe(root):
@@ -94,7 +111,7 @@ def _probe(root):
     import httpx
     import requests
     from agent.secret_scope import reset_secret_scope, set_secret_scope
-    from hermes_cli.plugins import discover_plugins, get_plugin_command_handler
+    from hermes_cli.plugins import discover_plugins, get_plugin_command_handler, get_plugin_manager
     from hermes_cli.runtime_provider import resolve_runtime_provider
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override
     from run_agent import AIAgent
@@ -106,13 +123,12 @@ def _probe(root):
     http_calls = []
     decision_calls = []
     chat_calls = []
+    native_attempts = []
     executed = []
     expected_auth = f"Bearer {fixture_key}"
-    replies = [
-        *(_tool_chunks(index, phase) for index, phase in enumerate(PHASES)),
-        [({"role": "assistant", "content": "Repair verified."}, None), ({}, "stop")],
-        [({"role": "assistant", "content": "Hello!"}, None), ({}, "stop")],
-    ]
+    replies = deque()
+    predictions = deque()
+    sequences = {}
 
     def send_gateway(_session, request, **kwargs):
         path = urlsplit(request.url).path
@@ -131,7 +147,7 @@ def _probe(root):
         elif path == "/v1/systemone":
             decision = json.loads(request.body)
             decision_calls.append(decision)
-            tier = "bounded" if len(decision_calls) == 1 else "routine"
+            tier = predictions.popleft()
             body = {
                 "model": decision["model"].removeprefix("ollama-local/"),
                 "answers": {"route": {"type": "choice", "choice": tier, "confidence": 0.99}},
@@ -152,8 +168,9 @@ def _probe(root):
         assert kwargs.get("stream") is True and body.get("stream") is True
         chat_calls.append(body)
         if len(chat_calls) == 2:
+            # A 408 exercises the outer retry without invoking the separate 5xx streaming probe.
             return httpx.Response(
-                503,
+                408,
                 request=request,
                 json={"error": {"message": "Synthetic transient failure"}},
                 headers={"Retry-After": "0.01"},
@@ -161,20 +178,65 @@ def _probe(root):
         return httpx.Response(
             200,
             request=request,
-            content=_sse(body["model"], replies.pop(0)).encode(),
+            content=_sse(body["model"], replies.popleft()).encode(),
             headers={"Content-Type": "text/event-stream"},
         )
 
     def execute_tool(name, args, *_args, **_kwargs):
         assert name == TOOL
-        phase = args["phase"]
-        executed.append(phase)
-        return json.dumps({"fixture_phase": phase, "ok": phase != "inspect"})
+        command = args["command"]
+        executed.append(command)
+        return json.dumps({**TOOL_RESULTS[command], "output": (PRIVATE_OUTPUT + " ") * 20})
+
+    def observe_attempt(api_request_id, retry_count, request):
+        native_attempts.append((api_request_id, retry_count, request.get("body", {}).get("model")))
+
+    def make_agent(runtime):
+        agent = AIAgent(
+            provider=runtime["provider"],
+            api_mode=runtime["api_mode"],
+            base_url=runtime["base_url"],
+            api_key=runtime["api_key"],
+            model=TRIGGER,
+            max_iterations=8,
+            platform="cli",
+            enabled_toolsets=[],
+            quiet_mode=True,
+            skip_context_files=True,
+            skip_memory=True,
+            skip_background_review=True,
+            cwd=str(home),
+        )
+        agent._cached_system_prompt = "Native routing probe."
+        agent.compression_enabled = False
+        return agent
+
+    def run_turn(agent, ask, answer, tiers, *, tools=(), history=(), retries=0):
+        assert len(tiers) == len(tools) + 1
+        first_chat, first_decision = len(chat_calls), len(decision_calls)
+        first_tool = len(executed)
+        replies.extend(_tool_chunks(first_tool + idx, tool) for idx, tool in enumerate(tools))
+        replies.append(_text_chunks(answer))
+        predictions.extend(tiers)
+        result = agent.run_conversation(
+            ask, conversation_history=list(history), stream_callback=lambda *_: None
+        )
+        assert result["final_response"] == answer, result.get("turn_exit_reason")
+        assert agent.model == TRIGGER and not replies
+        assert not predictions, f"Missing {len(predictions)} classifier calls for {ask!r}"
+        assert executed[first_tool:] == list(tools)
+        chats = chat_calls[first_chat:]
+        decisions = decision_calls[first_decision:]
+        assert len(chats) == len(tiers) + retries and len(decisions) == len(tiers)
+        assert all(body.get("tools") for body in chats)
+        assert all(ask in decision["state"] for decision in decisions)
+        return result["messages"], [body["model"] for body in chats], decisions
 
     try:
         discover_plugins(force=True)
         command = get_plugin_command_handler("routing-classifier")
         assert command is not None
+        get_plugin_manager()._hooks.setdefault("pre_api_request", []).append(observe_attempt)
         runtime = resolve_runtime_provider(requested="omniroute", target_model=TRIGGER)
         with (
             patch.object(httpx.Client, "send", send_chat),
@@ -187,57 +249,99 @@ def _probe(root):
             patch("model_tools.get_tool_definitions", return_value=[TOOL_SCHEMA]),
             patch("model_tools.check_toolset_requirements", return_value={}),
             patch("model_tools.handle_function_call", side_effect=execute_tool),
+            patch("agent.turn_api_error.compute_error_backoff", return_value=0),
         ):
             assert FIRST_CLASSIFIER in command(f"select {FIRST_CLASSIFIER}")
-            agent = AIAgent(
-                provider=runtime["provider"],
-                api_mode=runtime["api_mode"],
-                base_url=runtime["base_url"],
-                api_key=runtime["api_key"],
-                model=TRIGGER,
-                max_iterations=8,
-                platform="cli",
-                enabled_toolsets=[],
-                quiet_mode=True,
-                skip_context_files=True,
-                skip_memory=True,
-                skip_background_review=True,
-                cwd=str(home),
-            )
+            agent = make_agent(runtime)
             try:
-                agent._cached_system_prompt = "Native routing probe."
-                agent.compression_enabled = False
-                repair = agent.run_conversation(
-                    "Inspect this synthetic failure, apply the bounded repair and verify the result.",
-                    stream_callback=lambda *_: None,
+                repair_ask = "Can you take a look?"
+                repair_answer = (
+                    "The parser dropped the last field. I fixed the field boundary and the focused "
+                    "regression check passed. I can document the cause and the verification steps."
                 )
-                assert repair["final_response"] == "Repair verified.", repair.get(
-                    "turn_exit_reason"
+                history, sequences["repair"], repair_decisions = run_turn(
+                    agent,
+                    repair_ask,
+                    repair_answer,
+                    ["routine", "bounded", "bounded", "bounded"],
+                    tools=(INSPECT, REPAIR, VERIFY),
+                    retries=1,
                 )
-                assert agent.model == TRIGGER
+                assert sequences["repair"] == [ROUTES["routine"]] + [ROUTES["bounded"]] * 4
+                assert all(decision["model"] == FIRST_CLASSIFIER for decision in repair_decisions)
+
                 assert SECOND_CLASSIFIER in command(f"select {SECOND_CLASSIFIER}")
-                quick = agent.run_conversation(
-                    "Say hello.",
-                    conversation_history=repair["messages"],
-                    stream_callback=lambda *_: None,
+                # Fifty exchanges put the committed plan outside the old 96-message window.
+                acknowledgments = ("Thanks.", "Great.", "Sounds good.", "Okay.", "Got it.")
+                for acknowledgment in acknowledgments * 10:
+                    history, models, _ = run_turn(
+                        agent, acknowledgment, "Of course.", ["routine"], history=history
+                    )
+                    assert models == [ROUTES["routine"]]
+                assert sum(message["role"] == "user" for message in history) == 51
+
+                history, sequences["continuation"], continuation = run_turn(
+                    agent,
+                    "Go ahead.",
+                    "Documented the field boundary fix and the regression check.",
+                    ["bounded"],
+                    history=history,
                 )
-                assert quick["final_response"] == "Hello!", quick.get("turn_exit_reason")
+                assert sequences["continuation"] == [ROUTES["bounded"]]
+                assert repair_ask in continuation[0]["state"]
+                assert "I can document the cause" in continuation[0]["state"]
+                assert "Of course." not in continuation[0]["state"]
+
+                history, sequences["independent"], independent = run_turn(
+                    agent, "Say hello.", "Hello!", ["routine"], history=history
+                )
+                assert sequences["independent"] == [ROUTES["routine"]]
+                assert "Previous tier: bounded" in independent[0]["state"]
+
+                _, sequences["status"], status_decisions = run_turn(
+                    agent,
+                    "Check whether the fixture is ready. A short status is fine.",
+                    "Ready.",
+                    ["routine", "bounded", "routine"],
+                    tools=(INSPECT, VERIFY),
+                    history=history,
+                )
+                assert sequences["status"] == [ROUTES[t] for t in ("routine", "bounded", "routine")]
             finally:
                 agent.close()
-        assert executed == list(PHASES), executed
-        assert [body["model"] for body in chat_calls] == [ROUTES["bounded"]] * 5 + [
-            ROUTES["routine"]
-        ]
-        assert [decision["model"] for decision in decision_calls] == [
-            FIRST_CLASSIFIER,
-            SECOND_CLASSIFIER,
-        ]
+
+            fresh = make_agent(runtime)
+            try:
+                assert fresh.session_id != agent.session_id
+                _, sequences["fresh"], fresh_decisions = run_turn(
+                    fresh, "Say hello.", "Hello!", ["routine"]
+                )
+                assert sequences["fresh"] == [ROUTES["routine"]]
+                assert fresh_decisions[0]["state"] == "Say hello."
+            finally:
+                fresh.close()
+
+        assert all(decision["model"] == SECOND_CLASSIFIER for decision in decision_calls[4:])
         assert len([call for call in http_calls if call == ("GET", "/v1/systemone/models")]) == 2
-        assert len([call for call in http_calls if call == ("GET", "/v1/models")]) == 2
-        assert all(body.get("tools") for body in chat_calls[:5])
-        assert '"ok": false' in chat_calls[1]["messages"][-1]["content"]
-        assert chat_calls[1]["messages"] == chat_calls[2]["messages"]
-        assert "Say hello." in decision_calls[1]["state"]
+        assert json.loads(chat_calls[1]["messages"][-1]["content"])["exit_code"] == 1
+        assert chat_calls[1] == chat_calls[2]
+        assert len(native_attempts) == len(chat_calls)
+        assert native_attempts[1][0] == native_attempts[2][0]
+        assert [attempt[1] for attempt in native_attempts[1:3]] == [0, 1]
+        assert [attempt[2] for attempt in native_attempts[1:3]] == [ROUTES["bounded"]] * 2
+        for decision in decision_calls:
+            state = decision["state"]
+            assert len(state) <= 4000
+            assert PRIVATE_OUTPUT not in state and PRIVATE_ARGUMENT not in state
+        for group in (repair_decisions, status_decisions):
+            assert "Completed tool progress:" not in group[0]["state"]
+            for decision in group[1:]:
+                state = decision["state"]
+                assert state.startswith("Original turn context:\n")
+                assert "Completed tool progress:" in state
+                assert "Current tier:" not in state
+            assert "command execution (reported an error)" in group[1]["state"]
+            assert "command execution (completed)" in group[-1]["state"]
         print(
             "NATIVE_TURN_ROUTING "
             + json.dumps(
@@ -245,6 +349,8 @@ def _probe(root):
                     "mainCalls": len(chat_calls),
                     "decisions": len(decision_calls),
                     "toolCalls": len(executed),
+                    "nativeRetries": 1,
+                    "routes": sequences,
                     "providerCalls": 0,
                 }
             )

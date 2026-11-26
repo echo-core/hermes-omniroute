@@ -1,5 +1,5 @@
 name: hermes-omniroute-backend
-version: 0.3.0
+version: 0.3.1
 kind: backend
 author: echo-core
 homepage: https://github.com/echo-core/hermes-omniroute
@@ -17,7 +17,7 @@ config_schema:
     type: bool
     default: false
     label: Route OmniRoute turns
-    description: Use the selected System One classifier to choose one configured answer combo per user turn.
+    description: Route each user message with conversation context and reassess the remaining work after tools run.
   turn_routing_trigger:
     type: str
     default: auto-gpt

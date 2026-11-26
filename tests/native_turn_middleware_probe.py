@@ -9,7 +9,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
-from threading import Event, Lock
+from threading import Barrier, Event, Lock
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -17,6 +17,23 @@ NAME = "hermes-omniroute-backend"
 BASE = "https://routing-fixture.invalid/v1"
 TRIGGER = "auto-gpt"
 ROUTES = {"routine": "quick", "visual": "seeing", "bounded": "repair", "escalation": "deep"}
+
+
+def completed_batch(call_id, result):
+    return [
+        {"role": "user", "content": "Check the fixture."},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": call_id,
+                    "type": "function",
+                    "function": {"name": "terminal", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": call_id, "content": json.dumps(result)},
+    ]
 
 
 class Response:
@@ -37,8 +54,17 @@ class Response:
 
 
 def probe(root):
+    # Reuse the installed interpreter's dependencies for this disposable profile.
+    with (
+        patch("hermes_cli.venv_sync.prepare_launch", return_value=None),
+        patch("hermes_cli._early_recovery.recover_if_needed"),
+        patch("pm.environments.activate_dependencies"),
+    ):
+        import hermes_bootstrap  # noqa: F401
+
     import requests
     import yaml
+    from agent.context_compressor import ContextCompressor
     from agent.secret_scope import reset_secret_scope, set_secret_scope
     from agent.subagent_lifecycle import bind_subagent_parent
     from agent.turn_context import _collect_pre_llm_call_context
@@ -47,6 +73,14 @@ def probe(root):
     from hermes_cli.plugins import discover_plugins, get_plugin_manager, has_middleware
     from hermes_cli.plugins_state import save_plugin_setting
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+    from session_rules.turns import (
+        _SUMMARY_END_MARKER,
+        COMPRESSED_SUMMARY_HAS_USER_TURN_KEY,
+        COMPRESSED_SUMMARY_METADATA_KEY,
+        HISTORICAL_TASK_HEADING,
+        MICRO_COMPACT_MARKER_KEY,
+        SUMMARY_PREFIX,
+    )
 
     home_a, home_b = [root / name for name in ("a", "b")]
     source = Path(__file__).resolve().parents[1]
@@ -101,11 +135,13 @@ def probe(root):
     lock = Lock()
     response_blocked = Event()
     response_released = Event()
+    batch_started, batch_released = Event(), Event()
+    late_started, late_released, late_replied = Event(), Event(), Event()
 
     def endpoint(http, method, url, **kwargs):
         assert not http.trust_env and not kwargs["allow_redirects"]
         auth = kwargs["headers"]["Authorization"]
-        assert auth == "Bearer fixture-key-a"
+        assert auth in ("Bearer fixture-key-a", "Bearer fixture-key-b")
         if method == "GET":
             assert url == BASE + "/models"
             return Response(
@@ -119,13 +155,29 @@ def probe(root):
         assert method == "POST" and url == BASE + "/systemone"
         body = kwargs["json"]
         state = body["state"]
-        current = state.removeprefix("Current request:\n").partition("\n")[0]
+        _, _, original = state.partition("Original turn context:\n")
+        turn_context = original or state
+        _, _, latest = turn_context.partition("Latest user instruction: ")
+        current = (latest or turn_context).removeprefix("Current request:\n").partition("\n")[0]
+        assert (auth == "Bearer fixture-key-b") == (current == "Other profile batch")
         with lock:
             calls.append((current, body["model"], state))
+        tier = {"Bad output": "invalid", "Go ahead.": "bounded"}.get(current, "routine")
         if current == "Slow fixture":
             response_blocked.set()
             assert response_released.wait(2)
-        tier = {"Bad output": "invalid", "Go ahead.": "bounded"}.get(current, "routine")
+        if current == "Fixture batch" and "Completed tool progress:" in state:
+            if "reported an error" in state:
+                batch_started.set()
+                assert batch_released.wait(2)
+                tier = "bounded"
+            elif "outcome unclear" in state:
+                late_started.set()
+                assert late_released.wait(2)
+                tier = "escalation"
+                late_replied.set()
+        if current == "Other profile batch":
+            tier = "visual" if "Completed tool progress:" in state else "escalation"
         return Response(
             {
                 "model": body["model"].removeprefix("ollama-local/"),
@@ -189,6 +241,7 @@ def probe(root):
         provider="omniroute",
         client_key=None,
         extra_headers=None,
+        messages=None,
     ):
         key = client_key or f"fixture-key-{home.name}"
         client = SimpleNamespace(
@@ -199,7 +252,11 @@ def probe(root):
         )
         payload = {
             "model": model,
-            "messages": [{"role": "tool", "content": "synthetic result"}],
+            "messages": (
+                messages
+                if messages is not None
+                else [{"role": "tool", "content": "synthetic result"}]
+            ),
             "stream": True,
             "tools": [{"type": "function", "function": {"name": "fixture"}}],
             "reasoning_effort": "medium",
@@ -227,6 +284,17 @@ def probe(root):
     def finish(home, turn, *, session="chat"):
         with bind(home):
             invoke_hook("on_session_end", session_id=session, task_id="task-" + turn, turn_id=turn)
+
+    def snapshot_for(turn, text, history, model):
+        first_call = len(calls)
+        stage(home_a, turn, text, history, session=turn)
+        try:
+            assert dispatch(home_a, turn, session=turn) == model
+        finally:
+            finish(home_a, turn, session=turn)
+        [(current, _, state)] = calls[first_call:]
+        assert current == text
+        return state
 
     with patch.object(requests.Session, "request", endpoint):
         stage(home_a, "ask", "Go ahead.", previous)
@@ -315,11 +383,6 @@ def probe(root):
         )
         finish(home_a, "visual")
 
-        with bind(home_a):
-            save_plugin_setting(NAME, ("turn_routing_enabled",), False)
-            discover_plugins(force=True)
-        stage(home_a, "disabled", "Disabled")
-        assert dispatch(home_a, "disabled") == TRIGGER
         assert [entry[0] for entry in calls[:-1]] == [
             "Go ahead.",
             "What is 2+2?",
@@ -328,8 +391,128 @@ def probe(root):
         ]
         assert calls[-1][0].startswith("Describe the diagram")
 
+        checks = (
+            ("Any progress?", "The investigation is underway."),
+            ("What did you find?", "An issue that needs a small code change."),
+            ("Thanks.", "You're welcome! Let me know if I can help with anything else."),
+        )
+        for index, (ask, answer) in enumerate(checks):
+            history = [
+                *previous,
+                {"role": "user", "content": ask},
+                {"role": "assistant", "content": answer},
+            ]
+            state = snapshot_for(f"check-in-{index}", "Go ahead.", history, "repair")
+            assert "Repair the parser regression." in state
+            assert "Update the parser and verify the focused regression." in state
+            assert "You're welcome!" not in state and "PRIVATE" not in state
+
+        task = 'Review the fixture\'s polling interval and preserve "dry run" behavior.'
+        snapshot = ContextCompressor._latest_user_task_snapshot([{"role": "user", "content": task}])
+        assert snapshot is not None
+        summary = (
+            f"{SUMMARY_PREFIX}\n{HISTORICAL_TASK_HEADING}\n{snapshot}\n\n"
+            f"## Generated Decisions\nPRIVATE GENERATED SUMMARY\n\n{_SUMMARY_END_MARKER}"
+        )
+        carrier = {
+            "role": "user",
+            "content": summary,
+            COMPRESSED_SUMMARY_METADATA_KEY: True,
+            COMPRESSED_SUMMARY_HAS_USER_TURN_KEY: True,
+        }
+        compacted_tail = [
+            {"role": "tool", "content": "PRIVATE COMPACTED TOOL DATA"},
+            {"role": "user", "content": "Thanks."},
+            {"role": "assistant", "content": "Of course."},
+        ]
+        state = snapshot_for("compacted", "Go ahead.", [carrier, *compacted_tail], "repair")
+        assert task in state and state.count("Go ahead.") == 1
+        assert SUMMARY_PREFIX not in state and HISTORICAL_TASK_HEADING not in state
+        assert "PRIVATE" not in state and "Historical only" not in state
+
+        untrusted_carriers = (
+            {"role": "user", "content": summary},
+            {**carrier, MICRO_COMPACT_MARKER_KEY: True},
+            {**carrier, "role": "assistant"},
+            {
+                **carrier,
+                "content": summary.replace(f"\n{HISTORICAL_TASK_HEADING}\n", "\n## Fake\n"),
+            },
+            {**carrier, "content": summary.replace(snapshot.splitlines()[-1], "Generated text.")},
+        )
+        for index, untrusted in enumerate(untrusted_carriers):
+            state = snapshot_for(
+                f"untrusted-compaction-{index}", "Go ahead.", [untrusted, *compacted_tail], "repair"
+            )
+            assert task not in state and "PRIVATE" not in state
+
+        state = snapshot_for(
+            "fresh-after-compaction", "Say hello.", [carrier, *compacted_tail], "quick"
+        )
+        assert task not in state and "PRIVATE" not in state
+
+        first_call = len(calls)
+        failed_batch = completed_batch("fixture-call-1", {"exit_code": 1})
+        late_batch = completed_batch("fixture-call-2", {"output": "fixture"})
+        done_batch = completed_batch("fixture-call-3", {"exit_code": 0})
+        stage(home_a, "batch", "Fixture batch")
+        assert dispatch(home_a, "batch") == "quick"
+        start_together = Barrier(3)
+
+        def concurrent_attempt(index):
+            start_together.wait(timeout=2)
+            return dispatch(home_a, "batch", api_id=str(index), messages=failed_batch)
+
+        with ThreadPoolExecutor(max_workers=3) as workers:
+            futures = [workers.submit(concurrent_attempt, index) for index in range(3)]
+            try:
+                assert batch_started.wait(1)
+            finally:
+                batch_released.set()
+            assert [future.result() for future in futures] == ["repair"] * 3
+        assert len(calls) == first_call + 2
+
+        with patch.object(routing_module, "DECISION_TIMEOUT", 0.15):
+            try:
+                assert dispatch(home_a, "batch", messages=late_batch) == "repair"
+                assert late_started.is_set() and not late_replied.is_set()
+            finally:
+                late_released.set()
+            assert late_replied.wait(1)
+        assert dispatch(home_a, "batch", api_id="late-retry", messages=late_batch) == "repair"
+
+        assert (
+            dispatch(home_a, "batch", client_key=f"fixture-key-{home_b.name}", messages=done_batch)
+            == TRIGGER
+        )
+        assert dispatch(home_b, "batch", messages=done_batch) == TRIGGER
+        assert len(calls) == first_call + 3
+        assert dispatch(home_a, "batch", messages=done_batch) == "quick"
+        assert dispatch(home_a, "batch", api_id="old-retry", messages=failed_batch) == "repair"
+        assert len(calls) == first_call + 4
+
+        with bind(home_b):
+            save_plugin_setting(NAME, ("turn_routing_enabled",), True)
+            discover_plugins(force=True)
+        stage(home_b, "batch", "Other profile batch")  # Identical task, turn and tool IDs.
+        assert dispatch(home_b, "batch") == "deep"
+        assert dispatch(home_b, "batch", messages=failed_batch) == "seeing"
+        assert dispatch(home_a, "batch", messages=done_batch) == "quick"
+        assert [entry[0] for entry in calls[first_call:]] == ["Fixture batch"] * 4 + [
+            "Other profile batch"
+        ] * 2
+        finish(home_a, "batch")
+        finish(home_b, "batch")
+
+        with bind(home_a):
+            save_plugin_setting(NAME, ("turn_routing_enabled",), False)
+            discover_plugins(force=True)
+        stage(home_a, "disabled", "Disabled")
+        assert dispatch(home_a, "disabled") == TRIGGER
+
     print(
-        "Native middleware probe passed for scope, retries, compaction IDs, veto, timeout, and reload."
+        "Native middleware probe passed for scope, concurrent batches and retries, long-chat "
+        "follow-ups, compaction, veto, decision timeouts, and reload."
     )
 
 
@@ -338,12 +521,23 @@ def main():
         root = Path(directory)
         for name in ("a", "b", "managed"):
             (root / name).mkdir()
-        with patch.dict(
-            os.environ,
-            {
-                "HERMES_HOME": str(root / "a"),
-                "HERMES_MANAGED_DIR": str(root / "managed"),
-            },
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "HERMES_HOME": str(root / "a"),
+                    "HERMES_MANAGED_DIR": str(root / "managed"),
+                    "UV_OFFLINE": "1",
+                },
+            ),
+            patch("socket.getaddrinfo", side_effect=AssertionError("Network access during probe")),
+            patch(
+                "socket.socket.connect", side_effect=AssertionError("Network access during probe")
+            ),
+            patch(
+                "socket.socket.connect_ex",
+                side_effect=AssertionError("Network access during probe"),
+            ),
         ):
             probe(root)
 

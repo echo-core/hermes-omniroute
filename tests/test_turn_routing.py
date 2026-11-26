@@ -1,4 +1,4 @@
-"""Routing admission preserves older and default-off backend registration."""
+"""Routing admission, registration compatibility, and idle cleanup."""
 
 import sys
 from types import SimpleNamespace
@@ -47,3 +47,38 @@ def test_enabled_on_older_context_without_middleware_keeps_selector():
     turn_routing.register(ctx)
     assert register_command.call_args.args[0] == "routing-classifier"
     register_hook.assert_not_called()
+
+
+def test_abandoned_stage_retimes_idle_cleanup_and_ignores_obsolete_callback(monkeypatch):
+    now = 1000.0
+    monkeypatch.setattr(turn_routing, "time", SimpleNamespace(monotonic=lambda: now))
+    long_timer, staged_timer, replacement = Mock(), Mock(), Mock()
+    timer_factory = Mock(side_effect=[long_timer, staged_timer, replacement])
+    monkeypatch.setattr(turn_routing, "Timer", timer_factory)
+    router = turn_routing._Router(ctx=None, home="fixture")
+    active = SimpleNamespace(expires=now + turn_routing.TURN_TTL, close=Mock())
+    router.turns["active"] = active
+    router._schedule_expiration(now)
+    delay, obsolete_callback = timer_factory.call_args.args
+    assert delay == turn_routing.TURN_TTL
+    long_timer.start.assert_called_once()
+
+    staged = SimpleNamespace(expires=now + turn_routing.STAGED_TTL, close=Mock())
+    router.turns["staged"] = staged
+    router._schedule_expiration(now)
+    delay, staged_callback = timer_factory.call_args.args
+    assert delay == turn_routing.STAGED_TTL
+    long_timer.cancel.assert_called_once()
+    staged_timer.start.assert_called_once()
+
+    now = staged.expires
+    obsolete_callback()
+    staged.close.assert_not_called()
+    assert router.expiration == (staged.expires, staged_timer)
+
+    staged_callback()
+    staged.close.assert_called_once()
+    active.close.assert_not_called()
+    assert router.turns == {"active": active}
+    assert router.expiration == (active.expires, replacement)
+    replacement.start.assert_called_once()

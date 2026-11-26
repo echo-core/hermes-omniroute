@@ -9,9 +9,10 @@ contents; publication is recorded in GitHub Releases.
 
 ### Added
 
-- Backend 0.3.0 can use a selectable OmniRoute System One decision model to
-  choose one answer combo per user turn, including follow-ups that refer to
-  earlier work. Routing is opt-in per profile.
+- Backend 0.3.1 can route each user message with a selectable OmniRoute
+  classifier. Brief follow-ups carry earlier task context, and the classifier
+  can change the answer combo as tool results arrive. Routing is opt-in per
+  profile.
 
 ### Development
 

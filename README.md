@@ -155,10 +155,16 @@ maintain a separate chat-model list or set a manual context limit.
 
 #### Optional routing for follow-up turns
 
-With Hermes 0.23.4 in-process plugins, the backend can choose an answer combo
-once per user turn. The decision model sees the current request and a bounded
-excerpt of the preceding task or plan. Tool calls and the final answer use the
-chosen combo. A new user message starts a new decision.
+With Hermes 0.23.4 in-process plugins, each new user message goes to the
+selected decision model with a bounded excerpt of the conversation. For a
+short follow-up such as “go ahead,” the excerpt can include the earlier task
+and the latest plan or findings. A fresh question can choose a different
+answer combo in the same chat.
+
+During tool use, a completed batch of results gives the decision model
+another opportunity to choose a combo for the remaining work, including the
+final answer. It receives the user’s task and a short description of the tool
+outcome. A retry of the same step reuses its choice.
 
 In **Settings → Plugins → Hermes OmniRoute Backend**, set the trigger combo
 and map `routine`, `visual`, `bounded` and `escalation` to four distinct chat
@@ -176,10 +182,11 @@ configured provider priority and fallback. For a local Ollama classifier,
 the gateway must permit the `decisions` endpoint, the chosen model and its
 connection, and have `SYSTEMONE_OLLAMA_LOCAL_BACKEND_ENABLED` enabled.
 
-If classification fails or times out, Hermes sends the original combo and
-records the reason in the Hermes log. The original combo can then run its
-own native classifier. Turn routing defaults off. To revert, switch it off
-and reload the plugin.
+If the first decision fails or times out, Hermes sends the original combo,
+which can run its own classifier. If a later decision fails, Hermes keeps the
+last verified choice for that step. Hermes logs the reason. Turn routing
+defaults off. To revert, switch it off and reload the plugin.
+
 
 ### Images
 

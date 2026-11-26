@@ -1,18 +1,21 @@
-"""Profile-scoped, once-per-turn model routing at Hermes's main request boundary."""
+"""Profile-scoped model routing at Hermes's main request boundary."""
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
+from hashlib import sha256
 from os import environ
 from threading import BoundedSemaphore, Event, Lock, Thread, Timer
 from weakref import ref
 
 from .routing_gateway import Gateway, RoutingError, RoutingSettings, register_selection
 from .routing_policy import MAX_PROMPT_CHARS, ROUTE_SPECS
+from .routing_progress import tool_progress
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +24,8 @@ STAGED_TTL = 300.0
 TURN_TTL = 86400.0
 MAX_TURNS = 256
 MAX_DECISIONS = 4
-MAX_HISTORY_ROWS = 96
+MAX_PROGRESS_BATCHES = 256
+MAX_HISTORY_EXCHANGES = 96
 SOURCE = "omniroute.turn-routing"
 
 _ATTACHMENT_LINE = re.compile(
@@ -126,63 +130,177 @@ def _historical_user_input(message):
     return ("", False) if text.startswith(STEER_MARKER_OPEN) else (text, visual)
 
 
-def render_decision_input(user_message, conversation_history, *, prior_tier=None, has_visual=False):
-    """Build a bounded decision snapshot from the original request and preceding transcript."""
+_CONTEXT_REFERENCE = re.compile(
+    r"\b(it|this|that|these|those|them|one|ones|next|else|ready|news|updates?|again|"
+    r"proceed|instead|both|same|first|second|option|still|progress|findings?|status)\b"
+    r"|^(?:what|how|where) (?:did|do|have|are) (?:you|we)\b",
+    re.I,
+)
+
+
+def _refers_back(text):
+    if re.search(r"\b(?:new|separate|unrelated) (?:task|question|topic)\b", text, re.I):
+        return False
+    return len(text.split()) <= 12 and bool(_CONTEXT_REFERENCE.search(text))
+
+
+def _previous_work(history):
+    """Find the work a short continuation refers to, using only user and assistant text."""
     from session_rules.turns import is_compaction_summary_message
 
+    newest_user = newest_reply = reply = ""
+    latest_update = ""
+    exchanges = 0
+    for message in reversed(history):
+        if not isinstance(message, dict):
+            continue
+        if message.get("role") == "assistant":
+            if reply or message.get("tool_calls") or is_compaction_summary_message(message):
+                continue
+            text, _ = _text_and_visual(message.get("content"), limit=2000)
+            if text and not _ACKNOWLEDGMENT.fullmatch(text):
+                reply = text
+            continue
+        if message.get("role") != "user":
+            continue
+        text, visual = _historical_user_input(message)
+        if not (text or visual):
+            continue
+        acknowledgment = _ACKNOWLEDGMENT.fullmatch(text)
+        if visual or (not acknowledgment and not _refers_back(text)):
+            return text, reply, visual, latest_update
+        if not acknowledgment and not newest_user:
+            newest_user, newest_reply = text, reply
+        # A thank-you followed by a courtesy reply carries no new task state.
+        social = re.match(r"(?:thanks|thank you|great|got it|sounds good|of course)\b", text, re.I)
+        if not latest_update and not social:
+            parts = []
+            if not acknowledgment and (not text.endswith("?") or len(text.split()) >= 6):
+                parts.append(text)
+            if len(reply.split()) >= 8:
+                parts.append(reply)
+            latest_update = "\n".join(parts)
+        exchanges += not bool(acknowledgment)
+        if exchanges >= MAX_HISTORY_EXCHANGES:
+            break
+        reply = ""
+    return newest_user, newest_reply or latest_update, False, ""
+
+
+def _compacted_user_task(history):
+    """Read only Hermes's deterministic quoted user task from a marked full compaction."""
+    from ast import literal_eval
+
+    from session_rules.turns import (
+        COMPRESSED_SUMMARY_METADATA_KEY,
+        HISTORICAL_TASK_HEADING,
+        MICRO_COMPACT_MARKER_KEY,
+        SUMMARY_PREFIX,
+    )
+
+    field = "User asked (deterministic, from compacted turns): "
+    for row in reversed(history):
+        if not isinstance(row, dict) or row.get(COMPRESSED_SUMMARY_METADATA_KEY) is not True:
+            continue
+        if row.get("role") != "user" or row.get(MICRO_COMPACT_MARKER_KEY):
+            return ""
+        content = row.get("content")
+        if not isinstance(content, str) or not content.startswith(SUMMARY_PREFIX):
+            return ""
+        # Only the native first section qualifies. Other sections can contain
+        # tool output, older summaries or quoted text that looks like a task.
+        first = content[len(SUMMARY_PREFIX) : len(SUMMARY_PREFIX) + 2048].lstrip().splitlines()
+        if len(first) < 3 or first[0] != HISTORICAL_TASK_HEADING or not first[1].startswith(field):
+            return ""
+        if first[2] != "Historical only; newer protected-tail messages after this summary win.":
+            return ""
+        quoted = first[1][len(field) :]
+        if not quoted.startswith(("'", '"')):
+            return ""
+        try:
+            task = literal_eval(quoted)
+        except (SyntaxError, ValueError):
+            return ""
+        if not isinstance(task, str) or repr(task) != quoted:
+            return ""
+        task, _ = _text_and_visual(task, limit=1400)
+        return "" if _ACKNOWLEDGMENT.fullmatch(task) or _refers_back(task) else task
+    return ""
+
+
+def render_decision_input(user_message, conversation_history, *, prior_tier=None, has_visual=False):
+    """Build a bounded decision snapshot from the original request and preceding transcript."""
     current, visual = _text_and_visual(user_message)
     visual |= has_visual
     if not (current or visual):
         return "", False
 
-    prior_user = prior_assistant = current_assistant = ""
-    prior_visual = False
-    for message in reversed(conversation_history[-MAX_HISTORY_ROWS:]):
-        if not isinstance(message, dict):
-            continue
-        if message.get("role") == "user":
-            text, image = _historical_user_input(message)
-            if text or image:
-                prior_assistant = prior_assistant or current_assistant
-                if image or not _ACKNOWLEDGMENT.fullmatch(text):
-                    prior_user, prior_visual = text, image
-                    break
-            current_assistant = ""
-        elif (
-            message.get("role") == "assistant"
-            and not prior_assistant
-            and not current_assistant
-            and not is_compaction_summary_message(message)
-        ):
-            text, _ = _text_and_visual(message.get("content"), limit=2000)
-            if text and not _ACKNOWLEDGMENT.fullmatch(text):
-                current_assistant = text
-
-    if not (visual or prior_visual or prior_user or prior_assistant or prior_tier in ROUTE_SPECS):
+    previous, reply, previous_visual, progress = _previous_work(conversation_history)
+    if (
+        not visual
+        and not previous_visual
+        and (not previous or _refers_back(previous))
+        and (_ACKNOWLEDGMENT.fullmatch(current) or _refers_back(current))
+    ):
+        previous = _compacted_user_task(conversation_history) or previous
+    if not (visual or previous_visual or previous or reply or prior_tier in ROUTE_SPECS):
         return current, False
 
-    annotations = []
-    if visual or prior_visual:
+    notes = []
+    if visual or previous_visual:
         where = "current request" if visual else "preceding task"
-        annotations.append(f"\n\nVisual input is present in the {where}.")
+        notes.append(f"Visual input is present in the {where}.")
     if prior_tier in ROUTE_SPECS:
-        annotations.append(f"\n\nPrevious tier: {prior_tier}")
+        notes.append(f"Previous tier: {prior_tier}")
+
+    if previous and _ACKNOWLEDGMENT.fullmatch(current):
+        # On an approval, lead with what the user authorized. Repeating the approval
+        # as the main task makes a small classifier label substantive work as routine.
+        suffix = "\n\n".join([f"Latest user instruction: {current}", *notes])
+        parts = [previous, reply]
+        if progress:
+            parts.append("Latest progress: " + progress)
+        state = "\n\n".join(part for part in parts if part)
+        return state[: MAX_PROMPT_CHARS - len(suffix) - 2] + "\n\n" + suffix, True
+
     prefix = "Current request:\n"
-    notes = "".join(annotations)
+    notes = "".join("\n\n" + note for note in notes)
     rendered = prefix + current[: MAX_PROMPT_CHARS - len(prefix + notes)] + notes
-    user_title = "\n\nPreceding user task:\n"
-    assistant_title = "\n\nPreceding assistant plan or result:\n"
-    remaining = MAX_PROMPT_CHARS - len(rendered)
-    if prior_user:
-        user_budget = remaining - len(user_title)
-        if prior_assistant and user_budget > len(assistant_title) + 1:
-            user_budget = (user_budget - len(assistant_title)) // 2
-        if user_budget > 0:
-            rendered += user_title + prior_user[:user_budget]
-    assistant_budget = MAX_PROMPT_CHARS - len(rendered) - len(assistant_title)
-    if prior_assistant and assistant_budget > 0:
-        rendered += assistant_title + prior_assistant[:assistant_budget]
+    sections = [
+        ("Preceding user task", previous),
+        ("Preceding assistant plan or result", reply),
+        ("Latest progress", progress),
+    ]
+    sections = [(f"\n\n{title}:\n", text) for title, text in sections if text]
+    remaining = MAX_PROMPT_CHARS - len(rendered) - sum(len(label) for label, _ in sections)
+    for index, (label, text) in enumerate(sections):
+        limit = remaining // (len(sections) - index)
+        if limit < 1:
+            break
+        rendered += label + text[:limit]
+        remaining -= min(limit, len(text))
     return rendered, True
+
+
+def render_progress_input(task, summary):
+    """Combine the staged request and safe tool signals within the classifier limit."""
+    prefix = "Original turn context:\n"
+    progress = (
+        f"\n\nCompleted tool progress:\n{summary[:1200]}"
+        "\n\nAssess what still needs to be done, including the answer the user asked for."
+    )
+    task_budget = MAX_PROMPT_CHARS - len(prefix + progress)
+    if len(task) > task_budget:
+        tail = task_budget // 4
+        task = task[: task_budget - tail - 3] + " … " + task[-tail:]
+    return prefix + task + progress
+
+
+@dataclass
+class _Decision:
+    deadline: float
+    model: str | None = None
+    ready: Event = field(default_factory=Event)
 
 
 @dataclass
@@ -191,14 +309,22 @@ class _Turn:
     sender_id: str
     session_id: str
     expires: float
-    text: str
+    text: str = field(repr=False)
     contextual: bool
-    ready: Event = field(default_factory=Event)
-    deadline: float = 0.0
-    model: str | None = None
     base_url: str | None = None
     identity: tuple[str, bytes] | None = None
     identity_change_logged: bool = False
+    current: _Decision | None = None
+    batches: dict[bytes, _Decision] = field(default_factory=dict)
+
+    def close(self):
+        self.text = ""
+        self.batches.clear()
+        if self.current is not None:
+            self.current.ready.set()
+
+    def tier(self, model):
+        return next((tier for tier, combo in self.settings.models.items() if combo == model), None)
 
 
 class _Router:
@@ -213,25 +339,33 @@ class _Router:
 
     def _prune(self, now):
         for key in [key for key, turn in self.turns.items() if turn.expires <= now]:
-            del self.turns[key]
+            self.turns.pop(key).close()
 
     def _schedule_expiration(self, now):
+        expires = min((turn.expires for turn in self.turns.values()), default=None)
         if self.expiration is not None:
+            armed_at, armed_timer = self.expiration
+            if expires is not None and armed_at <= expires:
+                return
+            self.expiration = None
+            armed_timer.cancel()
+        if expires is None:
             return
-        expires = min((turn.expires for turn in self.turns.values() if turn.text), default=None)
-        if expires is not None:
-            router_ref = ref(self)
+        router_ref = ref(self)
 
-            def expire():
-                if router := router_ref():
-                    router._expire_staged()
+        def expire():
+            if router := router_ref():
+                router._expire_turns(timer)
 
-            self.expiration = Timer(max(0.0, expires - now), expire)
-            self.expiration.daemon = True
-            self.expiration.start()
+        timer = Timer(max(0.0, expires - now), expire)
+        self.expiration = expires, timer
+        timer.daemon = True
+        timer.start()
 
-    def _expire_staged(self):
+    def _expire_turns(self, timer):
         with self.lock:
+            if self.expiration is None or self.expiration[1] is not timer:
+                return
             self.expiration = None
             now = time.monotonic()
             self._prune(now)
@@ -299,8 +433,8 @@ class _Router:
             with self.lock:
                 turn = self.turns.pop((task_id, turn_id), None)
                 if turn is not None:
-                    turn.text = ""
-                    turn.ready.set()
+                    turn.close()
+                    self._schedule_expiration(time.monotonic())
 
     def rewrite(
         self,
@@ -322,6 +456,7 @@ class _Router:
             or api_mode != "chat_completions"
             or hermes_home_key() != self.home
             or not session_id
+            or not base_url
         ):
             return
         if not all(
@@ -341,102 +476,138 @@ class _Router:
             turn = self.turns.get(key)
             if turn is None or model != turn.settings.trigger:
                 return
-            turn.expires = now + TURN_TTL
-            start = not turn.deadline
+            decision = turn.current
+            start = decision is None
             if start:
-                turn.deadline = now + DECISION_TIMEOUT
+                decision = turn.current = _Decision(now + DECISION_TIMEOUT)
+                turn.expires = now + TURN_TTL
                 turn.base_url = base_url
-                text, turn.text = turn.text, ""
+                text = turn.text
             elif turn.base_url != base_url:
                 return
 
         if start:
-            self._start_decision(turn, text, base_url)
-        turn.ready.wait(max(0.0, turn.deadline - time.monotonic()))
+            self._start_decision(turn, decision, text, contextual=turn.contextual)
+        else:
+            progress = tool_progress(original_request.get("messages"))
+            if progress is not None:
+                if turn.identity is None:
+                    self._wait_for(decision)
+                if turn.identity is None or not self._matches_identity(turn):
+                    return
+                decision = self._progress_decision(turn, progress)
 
-        with self.lock:
-            if self.turns.get(key) is not turn:
-                return
-            if not turn.ready.is_set():
-                self._resolve(turn, reason="classifier timeout")
-            model_choice, identity = turn.model, turn.identity
-        if model_choice is None:
+        self._wait_for(decision)
+        model_choice = decision.model
+        if model_choice is None or not self._matches_identity(turn):
             return
-        try:
-            same_identity = Gateway.active_identity(expected_base_url=base_url) == identity
-        except Exception:
-            same_identity = False
         with self.lock:
             if self.turns.get(key) is not turn:
                 return
-            if not same_identity:
-                if not turn.identity_change_logged:
-                    turn.identity_change_logged = True
-                    logger.warning(
-                        "OmniRoute turn routing passed through after chat identity changed"
-                    )
-                return
-            tier = next(
-                tier for tier, combo in turn.settings.models.items() if combo == model_choice
-            )
-            for sid in (turn.session_id, session_id):
-                prior_key = (sid, turn.sender_id)
-                self.prior_tiers[prior_key] = tier
-                self.prior_tiers.move_to_end(prior_key)
-            while len(self.prior_tiers) > MAX_TURNS:
-                self.prior_tiers.popitem(last=False)
+            if decision is turn.current:
+                tier = turn.tier(model_choice)
+                for sid in (turn.session_id, session_id):
+                    prior_key = (sid, turn.sender_id)
+                    self.prior_tiers[prior_key] = tier
+                    self.prior_tiers.move_to_end(prior_key)
+                while len(self.prior_tiers) > MAX_TURNS:
+                    self.prior_tiers.popitem(last=False)
         return {
             "request": {**request, "model": model_choice},
             "source": SOURCE,
-            "reason": "selected for user turn",
+            "reason": "selected for current turn step",
         }
 
-    def _start_decision(self, turn, text, base_url):
+    def _matches_identity(self, turn):
+        try:
+            if Gateway.active_identity(expected_base_url=turn.base_url) == turn.identity:
+                return True
+        except Exception:
+            pass
+        with self.lock:
+            if not turn.identity_change_logged:
+                turn.identity_change_logged = True
+                logger.warning("OmniRoute turn routing passed through after chat identity changed")
+        return False
+
+    def _progress_decision(self, turn, progress):
+        call_ids, summary = progress
+        # Store only a fixed-size fingerprint, so opaque call IDs stay out of routing state.
+        batch = sha256(json.dumps(call_ids).encode()).digest()
+        deadline = time.monotonic() + DECISION_TIMEOUT
+        while True:
+            with self.lock:
+                current = turn.current
+                if previous := turn.batches.get(batch):
+                    return previous
+                if not turn.text or len(turn.batches) >= MAX_PROGRESS_BATCHES:
+                    return current
+                if current.ready.is_set():
+                    decision = _Decision(deadline, current.model)
+                    turn.current = turn.batches[batch] = decision
+                    text = render_progress_input(turn.text, summary)
+                    break
+            self._wait_for(current)
+        self._start_decision(turn, decision, text, contextual=True)
+        return decision
+
+    def _wait_for(self, decision):
+        if not decision.ready.wait(max(0.0, decision.deadline - time.monotonic())):
+            with self.lock:
+                self._resolve(decision, reason="classifier timeout")
+
+    def _start_decision(self, turn, decision, text, *, contextual):
+        if decision.ready.is_set() or time.monotonic() >= decision.deadline:
+            return
         try:
             # Hermes's active request credentials exist only on this thread's live turn context.
-            gateway = Gateway.from_profile(expected_base_url=base_url)
-        except RoutingError as exc:
+            gateway = Gateway.from_profile(expected_base_url=turn.base_url)
+            identity = gateway.identity
+        except Exception as exc:
+            reason = exc.reason if isinstance(exc, RoutingError) else "gateway identity unavailable"
             with self.lock:
-                self._resolve(turn, reason=exc.reason)
-            return
-        except Exception:
-            with self.lock:
-                self._resolve(turn, reason="gateway identity unavailable")
+                if turn.identity is None:
+                    turn.text = ""
+                self._resolve(decision, reason=reason)
             return
         with self.lock:
-            if turn.ready.is_set():
+            if decision.ready.is_set():
                 return
-            turn.identity = gateway.identity
+            if turn.identity is None:
+                turn.identity = identity
+            elif turn.identity != identity:
+                self._resolve(decision, reason="chat identity changed")
+                return
         if not self.workers.acquire(blocking=False):
             with self.lock:
-                self._resolve(turn, reason="classifier busy")
+                self._resolve(decision, reason="classifier busy")
             return
 
         def classify():
             try:
-                if turn.ready.is_set():
+                if decision.ready.is_set():
                     return
-                timeout = turn.deadline - time.monotonic()
+                timeout = decision.deadline - time.monotonic()
                 if timeout <= 0:
                     raise TimeoutError
                 choice = gateway.classify(
-                    turn.settings, text, contextual=turn.contextual, timeout_s=timeout
+                    turn.settings, text, contextual=contextual, timeout_s=timeout
                 )
                 if choice == turn.settings.trigger or choice not in turn.settings.models.values():
                     raise RoutingError(
                         "invalid_answer_route", "Classifier returned an unavailable answer route."
                     )
                 with self.lock:
-                    self._resolve(turn, model=choice)
+                    self._resolve(decision, model=choice)
             except RoutingError as exc:
                 with self.lock:
-                    self._resolve(turn, reason=exc.reason)
+                    self._resolve(decision, reason=exc.reason)
             except TimeoutError:
                 with self.lock:
-                    self._resolve(turn, reason="classifier timeout")
+                    self._resolve(decision, reason="classifier timeout")
             except Exception:
                 with self.lock:
-                    self._resolve(turn, reason="classifier unavailable")
+                    self._resolve(decision, reason="classifier unavailable")
             finally:
                 self.workers.release()
 
@@ -445,20 +616,23 @@ class _Router:
         except RuntimeError:
             self.workers.release()
             with self.lock:
-                self._resolve(turn, reason="classifier unavailable")
+                self._resolve(decision, reason="classifier unavailable")
 
     @staticmethod
-    def _resolve(turn, *, model=None, reason=None):
-        if turn.ready.is_set():
+    def _resolve(decision, *, model=None, reason=None):
+        if decision.ready.is_set():
             return
-        if time.monotonic() >= turn.deadline:
+        if time.monotonic() >= decision.deadline:
             model, reason = None, "classifier timeout"
-        turn.model = model
-        if reason:
+        if model is not None:
+            decision.model = model
+        elif decision.model is not None:
+            logger.warning("OmniRoute turn routing kept the previous choice (%s)", reason)
+        else:
             logger.warning(
                 "OmniRoute turn routing passed through to the selected combo (%s)", reason
             )
-        turn.ready.set()
+        decision.ready.set()
 
 
 def register(ctx):
