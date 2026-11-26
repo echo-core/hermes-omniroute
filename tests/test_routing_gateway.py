@@ -124,8 +124,15 @@ def _settings(model):
     return gateway.RoutingSettings(True, "fixture-auto", model, ROUTES)
 
 
-def _decision(tier, **metadata):
-    return {"answers": {"route": {"type": "choice", "choice": tier, "confidence": 0.9}}, **metadata}
+def _decision(tier, *, research=None, **metadata):
+    answers = {"route": {"type": "choice", "choice": tier, "confidence": 0.9}}
+    if research is not None:
+        source, advanced = research
+        answers["research_scope"] = {
+            "type": "choice",
+            "probabilities": {"source_research": source, "advanced_research": advanced},
+        }
+    return {"answers": answers, **metadata}
 
 
 def test_discover_select_and_classify_on_each_profiles_exact_chat_identity(monkeypatch, mock_http):
@@ -384,3 +391,212 @@ def test_local_decision_attests_the_selected_model(mock_http, reported, header):
         assert "other:latest" not in str(failure.value)
     else:
         assert transport.classify(settings, "Synthetic request") == "repair"
+
+
+@pytest.mark.parametrize(
+    ("second_tier", "probabilities", "expected"),
+    [
+        ("routine", (0.45, 0.20), "bounded"),
+        ("escalation", (0.45, 0.19), "routine"),
+        ("escalation", (0.10, 0.75), "bounded"),
+        ("unconfigured", (0.45, 0.30), "routine"),
+        ("routine", None, "routine"),
+        ("routine", (True, 0.30), "routine"),
+    ],
+)
+def test_extra_follow_up_scores_only_latest_request_and_caps_the_upgrade(
+    mock_http, second_tier, probabilities, expected
+):
+    calls, replies = mock_http
+    transport = gateway.Gateway(BASE_A, PROFILE_A)
+    model = "fixture-local:latest"
+    settings = _settings(f"ollama-local/{model}")
+    current = "Verify the first finding."
+    contextual = f"Current request:\n{current}\n\nPrevious item:\nSynthetic finding."
+    replies.extend(
+        [
+            Response(_catalog(*_combos())),
+            Response(_decision("routine", model=model)),
+            Response(_decision(second_tier, research=probabilities, model=model)),
+        ]
+    )
+    saved = []
+
+    def on_primary(choice):
+        assert len(calls) == 2
+        saved.append(choice)
+
+    assert (
+        transport.classify(
+            settings,
+            contextual,
+            contextual=True,
+            evidence_request=current,
+            on_primary=on_primary,
+        )
+        == ROUTES[expected]
+    )
+    assert saved == [ROUTES["routine"]]
+    assert [(method, url) for method, url, _ in calls] == [
+        ("GET", BASE_A + "/models"),
+        ("POST", BASE_A + "/systemone"),
+        ("POST", BASE_A + "/systemone"),
+    ]
+    assert all(call[2]["headers"]["Authorization"] == f"Bearer {PROFILE_A}" for call in calls)
+    primary, extra = (call[2]["json"] for call in calls[1:])
+    assert primary["state"] == contextual
+    assert extra == {**primary, "state": current}
+    assert (
+        "evidence needed for the newest request"
+        in extra["questions"]["research_scope"]["instructions"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("classifier", "primary_tier", "research", "is_contextual", "evidence", "cost", "expected"),
+    [
+        ("ollama-local/fixture", "visual", None, True, "Verify it.", None, "visual"),
+        ("ollama-local/fixture", "bounded", None, True, "Verify it.", None, "bounded"),
+        ("ollama-local/fixture", "escalation", None, True, "Verify it.", None, "escalation"),
+        ("ollama-local/fixture", "routine", (0.7, 0), True, "Verify it.", None, "bounded"),
+        ("ollama-local/fixture", "routine", None, False, "Verify it.", None, "routine"),
+        ("ollama-local/fixture", "routine", None, True, None, None, "routine"),
+        ("ollama-local/fixture", "routine", None, True, "Synthetic context", None, "routine"),
+        ("ollama-local/fixture", "routine", None, True, "x" * 4001, None, "routine"),
+        ("openrouter/fixture", "routine", None, True, "Verify it.", None, "routine"),
+        ("ollama-local/fixture:cloud", "routine", None, True, "Verify it.", None, "routine"),
+        ("ollama-local/fixture:0.5b-cloud", "routine", None, True, "Verify it.", None, "routine"),
+        ("ollama-local/fixture", "routine", None, True, "Verify it.", 0.01, "routine"),
+    ],
+)
+def test_extra_follow_up_only_runs_after_an_eligible_local_routine_decision(
+    mock_http, classifier, primary_tier, research, is_contextual, evidence, cost, expected
+):
+    calls, replies = mock_http
+    replies.extend(
+        [
+            Response(_catalog(*_combos())),
+            Response(
+                _decision(primary_tier, research=research, model=classifier, usage={"cost": cost})
+            ),
+        ]
+    )
+    saved = []
+    transport = gateway.Gateway(BASE_A, PROFILE_A)
+    assert (
+        transport.classify(
+            _settings(classifier),
+            "Synthetic context",
+            contextual=is_contextual,
+            evidence_request=evidence,
+            on_primary=saved.append,
+        )
+        == ROUTES[expected]
+    )
+    assert [method for method, *_ in calls] == ["GET", "POST"]
+    assert saved == []
+
+
+def test_primary_callback_can_decline_the_extra_request(mock_http):
+    calls, replies = mock_http
+    replies.extend(
+        [
+            Response(_catalog(*_combos())),
+            Response(_decision("routine", model="fixture-local")),
+        ]
+    )
+
+    def cancelled(choice):
+        assert choice == ROUTES["routine"]
+        return False
+
+    transport = gateway.Gateway(BASE_A, PROFILE_A)
+    assert (
+        transport.classify(
+            _settings("ollama-local/fixture-local"),
+            "Synthetic context",
+            contextual=True,
+            evidence_request="Verify the first finding.",
+            on_primary=cancelled,
+        )
+        == ROUTES["routine"]
+    )
+    assert [method for method, *_ in calls] == ["GET", "POST"]
+
+
+@pytest.mark.parametrize(
+    "extra_reply",
+    [
+        requests.Timeout("synthetic timeout"),
+        requests.ConnectionError("synthetic connection error"),
+        Response({}, status=403),
+        Response(_decision("routine", research=(0.8, 0))),
+        Response(_decision("routine", research=(0.8, 0), model="other:latest")),
+        Response(
+            _decision("routine", research=(0.8, 0), model="fixture-local"),
+            headers={"X-OmniRoute-Model": "other:latest"},
+        ),
+    ],
+)
+def test_failed_or_unattested_extra_check_keeps_the_verified_primary(mock_http, extra_reply):
+    calls, replies = mock_http
+    replies.extend(
+        [
+            Response(_catalog(*_combos())),
+            Response(_decision("routine", model="fixture-local")),
+            extra_reply,
+        ]
+    )
+    transport = gateway.Gateway(BASE_A, PROFILE_A)
+    assert (
+        transport.classify(
+            _settings("ollama-local/fixture-local"),
+            "Synthetic context",
+            contextual=True,
+            evidence_request="Verify the first finding.",
+        )
+        == ROUTES["routine"]
+    )
+    assert [method for method, *_ in calls] == ["GET", "POST", "POST"]
+
+
+@pytest.mark.parametrize("primary_time", [0.5, 1.8])
+def test_extra_follow_up_uses_only_the_remaining_budget(monkeypatch, mock_http, primary_time):
+    calls, replies = mock_http
+    now = 0.0
+    monkeypatch.setattr(gateway, "time", SimpleNamespace(monotonic=lambda: now))
+
+    class TimedResponse(Response):
+        def __init__(self, body, duration):
+            super().__init__(body)
+            self.duration = duration
+
+        def iter_content(self, chunk_size):
+            nonlocal now
+            now += self.duration
+            yield from super().iter_content(chunk_size)
+
+    replies.extend(
+        [
+            TimedResponse(_catalog(*_combos()), 0.25),
+            TimedResponse(_decision("routine", model="fixture-local"), primary_time),
+            TimedResponse(_decision("routine", research=(0.8, 0), model="fixture-local"), 1.5),
+        ]
+    )
+    transport = gateway.Gateway(BASE_A, PROFILE_A)
+    settings = _settings("ollama-local/fixture-local")
+    if primary_time == 1.8:
+        with pytest.raises(gateway.RoutingError) as failure:
+            transport.classify(
+                settings, "Synthetic context", contextual=True, evidence_request="Verify it."
+            )
+        assert failure.value.reason == "gateway_timeout"
+        assert [call[2]["timeout"] for call in calls] == [2.0, 1.75]
+    else:
+        assert (
+            transport.classify(
+                settings, "Synthetic context", contextual=True, evidence_request="Verify it."
+            )
+            == ROUTES["routine"]
+        )
+        assert [call[2]["timeout"] for call in calls] == [2.0, 1.75, 1.25]

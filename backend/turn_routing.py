@@ -9,6 +9,7 @@ import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from hashlib import sha256
+from itertools import islice
 from os import environ
 from threading import BoundedSemaphore, Event, Lock, Thread, Timer
 from weakref import ref
@@ -42,6 +43,62 @@ _ACKNOWLEDGMENT = re.compile(rf"(?:{_ACK_PHRASE})(?:[,.!] +(?:{_ACK_PHRASE}))*[.
 _VISUAL_PARTS = frozenset({"image", "image_url", "input_image"})
 _TEXT_PARTS = frozenset({"text", "input_text", "output_text"})
 _CREDENTIAL_HEADERS = frozenset({"authorization", "api-key", "x-api-key", "x-omniroute-api-key"})
+_REFERENCE_REQUEST_LIMIT = 320
+_REFERENCE_ITEM_LIMIT = 1400
+_INLINE_ITEM_LIMIT = 240
+_ORDINALS = {
+    word: number
+    for number, word in enumerate(
+        "first second third fourth fifth sixth seventh eighth ninth tenth".split(), 1
+    )
+}
+_CARDINALS = {
+    word: number
+    for number, word in enumerate("one two three four five six seven eight nine ten".split(), 1)
+}
+_ORDINAL = rf"(?ai:{'|'.join(_ORDINALS)}|[1-9][0-9]?(?:st|nd|rd|th))"
+_CARDINAL = rf"(?ai:{'|'.join(_CARDINALS)}|[1-9][0-9]?)"
+_ITEM_NOUN = (
+    r"(?ai:action|choice|entry|example|finding|issue|item|option|point|proposal|"
+    r"reason|recommendation|result|step|suggestion|task)"
+)
+_NUMBERED_REFERENCE = re.compile(
+    rf"\b(?:(?P<ordinal>{_ORDINAL})\s+(?:{_ITEM_NOUN}|one)"
+    rf"|{_ITEM_NOUN}\s+(?:(?:number|no\.?)\s+|#\s*)?(?P<number>{_CARDINAL}))\b",
+    re.I,
+)
+_OTHER_NUMBER = re.compile(
+    rf"\b{_ORDINAL}\b|#\s*[0-9]|\b(?:both|each)\b"
+    r"|\b(?:and|or|through|to|versus|vs\.?)\s+"
+    rf"(?:(?:the\s+)?(?:rest|other|remaining|last|former|latter)\b|{_CARDINAL}\b)",
+    re.I,
+)
+_TOPIC_CHANGE = re.compile(
+    r"\b(?:new|separate|unrelated|different|another) (?:task|question|topic|subject)\b"
+    r"|\b(?:change|switch) (?:the )?(?:subject|topics?)\b|\bon a different note\b"
+    r"|[,.;?!]\s+(?:and\s+)?(?:also|separately)\b",
+    re.I,
+)
+_LIST_ITEM = re.compile(r"^([ \t]*)(\*\*)?([0-9]+)([.)])(?:\*\*)?(?:[ \t]+|$)", re.M)
+_LIST_BOUNDARY = re.compile(
+    r"(?:#{1,6}[ \t]+|[-+*>][ \t]+|(?:[-*_][ \t]*){3,}$|\*\*.+\*\*:?[ \t]*$)"
+)
+_UNSAFE_ITEM_MARKUP = re.compile(r"^[ \t]*(?:`{3,}|~{3,})|<\s*(?:pre|code|img)\b|!\[", re.M | re.I)
+_ITEM_SUBJECT = re.compile(r"\s+(?:of|in|for|to|from|on|about)\s+", re.I)
+_REFERENCE_QUALIFIER = re.compile(
+    r"(?:(?:the|your|our) (?:above|earlier|last|previous|prior)|"
+    r"your (?:answer|list|review|response|plan|suggestions|recommendations|findings|examples)|"
+    r"(?:one|a single|a|two|three) (?:short |simple |plain )?(?:sentences?|paragraphs?|bullets?)|"
+    r"(?:plain|simple) (?:english|language|text))\b",
+    re.I,
+)
+_REFERENCE_DETERMINER = re.compile(r"\b(?:the|your|our|that|this)\s+$", re.I)
+_INLINE_ITEM_MARKUP = re.compile(r"[`*_~#\[\]<>|'\"‘’“”]|\w+://|\bwww\.", re.I)
+_DELEGATION_PREFIX = re.compile(
+    r"(?:please\s+)?(?:do|use|choose|pick|take|follow|implement|pursue|try|apply|"
+    r"(?:go(?: ahead)?|proceed) with)\s+",
+    re.I,
+)
 
 
 def _has_visual(content):
@@ -144,6 +201,149 @@ def _refers_back(text):
     return len(text.split()) <= 12 and bool(_CONTEXT_REFERENCE.search(text))
 
 
+def _numbered_reference(text):
+    if len(text) > _REFERENCE_REQUEST_LIMIT or any(char in text for char in "\r\n;"):
+        return None
+    if _TOPIC_CHANGE.search(text) or re.search(r"`|[\[\]<>]|https?://", text):
+        return None
+    matches = list(_NUMBERED_REFERENCE.finditer(text))
+    if len(matches) != 1:
+        return None
+    match = matches[0]
+    before, after = text[: match.start()], text[match.end() :]
+    if _OTHER_NUMBER.search(before) or _OTHER_NUMBER.search(after):
+        return None
+    # An ordinal or number that introduces its own subject may belong to a new task.
+    if (preposition := _ITEM_SUBJECT.match(after)) and not _REFERENCE_QUALIFIER.match(
+        after, preposition.end()
+    ):
+        return None
+    if re.match(r"[./]\s*[0-9]|\s*[,/&—–-]\s*(?:#\s*)?[0-9]", after):
+        return None
+    if cardinal := match["number"]:
+        number = int(cardinal) if cardinal.isdigit() else _CARDINALS[cardinal.casefold()]
+    else:
+        ordinal = match["ordinal"].casefold()
+        number = _ORDINALS.get(ordinal)
+        if number is None:
+            number = int(ordinal[:-2])
+            suffix = "th"
+            if not 11 <= number <= 13:
+                suffix = {1: "st", 2: "nd", 3: "rd"}.get(number % 10, "th")
+            if not ordinal.endswith(suffix):
+                return None
+    return number, match
+
+
+def _only_delegates(current):
+    """Whether the instruction adds only consent to carry out a selected item."""
+    reference = _numbered_reference(current)
+    if reference is None:
+        return False
+    _, match = reference
+    prefix = _REFERENCE_DETERMINER.sub("", current[: match.start()])
+    return bool(
+        _DELEGATION_PREFIX.fullmatch(prefix)
+        and re.fullmatch(r"(?:\s+please)?[.!…]*", current[match.end() :], re.I)
+    )
+
+
+def _latest_reference_reply(history):
+    """Use only the newest substantive answer before a real user or compaction boundary."""
+    from gateway.response_filters import is_machinery_display_kind
+    from session_rules.turns import is_compaction_summary_message
+
+    for message in islice(reversed(history), MAX_HISTORY_EXCHANGES):
+        if not isinstance(message, dict):
+            continue
+        if is_compaction_summary_message(message):
+            break
+        role = message.get("role")
+        if role == "user":
+            if any(_historical_user_input(message)):
+                break
+            continue
+        if (
+            role != "assistant"
+            or message.get("tool_calls")
+            or is_machinery_display_kind(message.get("display_kind"))
+        ):
+            continue
+        content = message.get("content")
+        if isinstance(content, list):
+            # Content blocks can mix attachments and text. Keep the selective path
+            # to plain answers so a visible attachment cannot lose its routing hint.
+            break
+        if not isinstance(content, str):
+            continue
+        if len(content) > MAX_PROMPT_CHARS:
+            break
+        text, visual = _text_and_visual(content)
+        if visual:
+            break
+        if text and not _ACKNOWLEDGMENT.fullmatch(text):
+            return text
+    return ""
+
+
+def _numbered_item(reply, number):
+    """Extract one item from a single consistently numbered, top-level list."""
+    if _UNSAFE_ITEM_MARKUP.search(reply):
+        return ""
+    markers = list(_LIST_ITEM.finditer(reply))
+    if not 1 <= number <= len(markers):
+        return ""
+    indent, bold, _, separator = markers[0].groups()
+    if len(indent) > 3 or "\t" in indent:
+        return ""
+
+    selected = ""
+    for position, marker in enumerate(markers, 1):
+        if marker.groups() != (indent, bold, str(position), separator):
+            return ""
+        next_item = position < len(markers)
+        end = markers[position].start() if next_item else len(reply)
+        lines = reply[marker.start() : end].splitlines()
+        if not lines[0][marker.end() - marker.start() :].strip():
+            return ""
+        content_indent = marker.end() - marker.start() if not bold else len(indent)
+        blank = False
+        for index, line in enumerate(lines[1:], 1):
+            clean = line.lstrip()
+            if not clean:
+                blank = True
+                continue
+            leading = len(line) - len(clean)
+            if blank and (leading >= content_indent + 4 or line.startswith("\t")):
+                return ""
+            unindented = leading <= len(indent)
+            if (unindented and _LIST_BOUNDARY.match(clean)) or (blank and leading < content_indent):
+                if next_item:
+                    return ""
+                lines = lines[:index]
+                break
+            blank = False
+        if position == number:
+            selected = "\n".join(lines).strip()
+    return selected if len(selected) <= _REFERENCE_ITEM_LIMIT else ""
+
+
+def _render_reference(current, match, item):
+    """Inline short plain text; keep formatted findings intact in their own section."""
+    marker = _LIST_ITEM.match(item)
+    body = item[marker.end() :].removesuffix(".").rstrip()
+    if (
+        0 < len(body) <= _INLINE_ITEM_LIMIT
+        and "\n" not in item
+        and not marker.group(2)
+        and not _INLINE_ITEM_MARKUP.search(body)
+    ):
+        determiner = _REFERENCE_DETERMINER.search(current[: match.start()])
+        start = determiner.start() if determiner else match.start()
+        return f"{current[:start]}“{body}”{current[match.end() :]}"
+    return f"Current request:\n{current}\n\nPreceding assistant plan or result:\n{item}"
+
+
 def _previous_work(history):
     """Find the work a short continuation refers to, using only user and assistant text."""
     from session_rules.turns import is_compaction_summary_message
@@ -228,12 +428,12 @@ def _compacted_user_task(history):
     return ""
 
 
-def render_decision_input(user_message, conversation_history, *, prior_tier=None, has_visual=False):
-    """Build a bounded decision snapshot from the original request and preceding transcript."""
+def render_turn_context(user_message, conversation_history, *, prior_tier=None, has_visual=False):
+    """Return the decision snapshot, context flag, user objective and reference flag."""
     current, visual = _text_and_visual(user_message)
     visual |= has_visual
     if not (current or visual):
-        return "", False
+        return "", False, "", False
 
     previous, reply, previous_visual, progress = _previous_work(conversation_history)
     if (
@@ -244,7 +444,13 @@ def render_decision_input(user_message, conversation_history, *, prior_tier=None
     ):
         previous = _compacted_user_task(conversation_history) or previous
     if not (visual or previous_visual or previous or reply or prior_tier in ROUTE_SPECS):
-        return current, False
+        return current, False, current, False
+
+    if not (visual or previous_visual) and (reference := _numbered_reference(current)) is not None:
+        number, match = reference
+        item = _numbered_item(_latest_reference_reply(conversation_history), number)
+        if item:
+            return _render_reference(current, match, item), True, current, True
 
     notes = []
     if visual or previous_visual:
@@ -261,7 +467,8 @@ def render_decision_input(user_message, conversation_history, *, prior_tier=None
         if progress:
             parts.append("Latest progress: " + progress)
         state = "\n\n".join(part for part in parts if part)
-        return state[: MAX_PROMPT_CHARS - len(suffix) - 2] + "\n\n" + suffix, True
+        rendered = state[: MAX_PROMPT_CHARS - len(suffix) - 2] + "\n\n" + suffix
+        return rendered, True, previous, False
 
     prefix = "Current request:\n"
     notes = "".join("\n\n" + note for note in notes)
@@ -279,21 +486,35 @@ def render_decision_input(user_message, conversation_history, *, prior_tier=None
             break
         rendered += label + text[:limit]
         remaining -= min(limit, len(text))
-    return rendered, True
+    return rendered, True, current, False
 
 
-def render_progress_input(task, summary):
-    """Combine the staged request and safe tool signals within the classifier limit."""
-    prefix = "Original turn context:\n"
-    progress = (
-        f"\n\nCompleted tool progress:\n{summary[:1200]}"
-        "\n\nAssess what still needs to be done, including the answer the user asked for."
+def render_decision_input(user_message, conversation_history, *, prior_tier=None, has_visual=False):
+    """Build a bounded decision snapshot from the original request and preceding transcript."""
+    text, contextual, _, _ = render_turn_context(
+        user_message, conversation_history, prior_tier=prior_tier, has_visual=has_visual
     )
-    task_budget = MAX_PROMPT_CHARS - len(prefix + progress)
-    if len(task) > task_budget:
-        tail = task_budget // 4
-        task = task[: task_budget - tail - 3] + " … " + task[-tail:]
-    return prefix + task + progress
+    return text, contextual
+
+
+def _fit_excerpt(text, limit):
+    if len(text) <= limit:
+        return text
+    tail = limit // 4
+    return text[: limit - tail - 3] + " … " + text[-tail:]
+
+
+def render_progress_input(task, summary, current_tier=None, objective=None):
+    """Reassess the remaining work using the last route and the user's objective."""
+    tier = current_tier if current_tier in ROUTE_SPECS else "unknown"
+    work = _fit_excerpt(objective or task, 1000)
+    progress = (
+        f"\n\nCurrent tier for this task: {tier}\n\nMost recent tool results:\n{summary[:1200]}"
+        f"\n\nWork the user requested:\n{work}"
+        "\nUse the tier needed for the remaining work. A completed tool call alone does not "
+        "establish that the requested work is done."
+    )
+    return _fit_excerpt(task, MAX_PROMPT_CHARS - len(progress)) + progress
 
 
 @dataclass
@@ -311,6 +532,8 @@ class _Turn:
     expires: float
     text: str = field(repr=False)
     contextual: bool
+    objective: str = field(repr=False)
+    resolved_reference: bool
     base_url: str | None = None
     identity: tuple[str, bytes] | None = None
     identity_change_logged: bool = False
@@ -319,6 +542,7 @@ class _Turn:
 
     def close(self):
         self.text = ""
+        self.objective = ""
         self.batches.clear()
         if self.current is not None:
             self.current.ready.set()
@@ -413,7 +637,7 @@ class _Router:
             if key in self.turns or len(self.turns) >= MAX_TURNS:
                 return
             prior_tier = self.prior_tiers.get((session_id, sender_id))
-        text, contextual = render_decision_input(
+        text, contextual, objective, resolved_reference = render_turn_context(
             user_message, history[:-1], prior_tier=prior_tier, has_visual=has_visual
         )
         if not text:
@@ -422,7 +646,14 @@ class _Router:
             if key not in self.turns and len(self.turns) < MAX_TURNS:
                 now = time.monotonic()
                 self.turns[key] = _Turn(
-                    settings, sender_id, session_id, now + STAGED_TTL, text, contextual
+                    settings,
+                    sender_id,
+                    session_id,
+                    now + STAGED_TTL,
+                    text,
+                    contextual,
+                    objective,
+                    resolved_reference,
                 )
                 self._schedule_expiration(now)
 
@@ -487,7 +718,17 @@ class _Router:
                 return
 
         if start:
-            self._start_decision(turn, decision, text, contextual=turn.contextual)
+            self._start_decision(
+                turn,
+                decision,
+                text,
+                contextual=turn.contextual,
+                evidence_request=(
+                    turn.objective
+                    if turn.resolved_reference and not _only_delegates(turn.objective)
+                    else None
+                ),
+            )
         else:
             progress = tool_progress(original_request.get("messages"))
             if progress is not None:
@@ -545,7 +786,9 @@ class _Router:
                 if current.ready.is_set():
                     decision = _Decision(deadline, current.model)
                     turn.current = turn.batches[batch] = decision
-                    text = render_progress_input(turn.text, summary)
+                    text = render_progress_input(
+                        turn.text, summary, turn.tier(current.model), turn.objective
+                    )
                     break
             self._wait_for(current)
         self._start_decision(turn, decision, text, contextual=True)
@@ -556,7 +799,7 @@ class _Router:
             with self.lock:
                 self._resolve(decision, reason="classifier timeout")
 
-    def _start_decision(self, turn, decision, text, *, contextual):
+    def _start_decision(self, turn, decision, text, *, contextual, evidence_request=None):
         if decision.ready.is_set() or time.monotonic() >= decision.deadline:
             return
         try:
@@ -568,6 +811,7 @@ class _Router:
             with self.lock:
                 if turn.identity is None:
                     turn.text = ""
+                    turn.objective = ""
                 self._resolve(decision, reason=reason)
             return
         with self.lock:
@@ -583,6 +827,15 @@ class _Router:
                 self._resolve(decision, reason="classifier busy")
             return
 
+        def keep_primary(model):
+            # The optional evidence check shares the original deadline. A slow second
+            # response must preserve the already verified first decision.
+            with self.lock:
+                if decision.ready.is_set() or time.monotonic() >= decision.deadline:
+                    return False
+                decision.model = model
+                return True
+
         def classify():
             try:
                 if decision.ready.is_set():
@@ -591,7 +844,12 @@ class _Router:
                 if timeout <= 0:
                     raise TimeoutError
                 choice = gateway.classify(
-                    turn.settings, text, contextual=contextual, timeout_s=timeout
+                    turn.settings,
+                    text,
+                    contextual=contextual,
+                    timeout_s=timeout,
+                    evidence_request=evidence_request,
+                    on_primary=keep_primary if evidence_request else None,
                 )
                 if choice == turn.settings.trigger or choice not in turn.settings.models.values():
                     raise RoutingError(

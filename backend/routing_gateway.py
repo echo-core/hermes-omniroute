@@ -5,13 +5,19 @@ from __future__ import annotations
 import json
 import re
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from hashlib import sha256
 from hmac import compare_digest
 from urllib.parse import urlsplit
 
-from .routing_policy import MAX_PROMPT_CHARS, build_questions, select_route
+from .routing_policy import (
+    MAX_PROMPT_CHARS,
+    SOURCE_RESEARCH_THRESHOLD,
+    build_questions,
+    research_probabilities,
+    select_route,
+)
 
 ENABLED_KEY = "turn_routing_enabled"
 TRIGGER_KEY = "turn_routing_trigger"
@@ -23,6 +29,7 @@ PAGE_SIZE = 100
 MAX_PAGES = 20
 MAX_RESPONSE_BYTES = 512 * 1024
 CATALOG_TIMEOUT_S = 5.0
+_OLLAMA_LOCAL_PREFIX = "ollama-local/"
 _COMBO_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:@-]*(?:/[A-Za-z0-9@][A-Za-z0-9_.:@-]*)*")
 
 
@@ -342,14 +349,30 @@ class Gateway:
             "A configured answer combo is missing from this profile’s OmniRoute catalog.",
         )
 
+    def _decision_response(self, classifier, state, questions, deadline):
+        payload = {"model": classifier, "state": state, "questions": questions}
+        result, headers = self._request("POST", "/systemone", deadline, payload=payload)
+        if classifier.startswith(_OLLAMA_LOCAL_PREFIX):
+            _verify_local_model(classifier, result, headers)
+        return result
+
     def classify(
-        self, settings: RoutingSettings, decision_text: str, *, contextual=False, timeout_s=2.0
+        self,
+        settings: RoutingSettings,
+        decision_text: str,
+        *,
+        contextual=False,
+        timeout_s=2.0,
+        evidence_request: str | None = None,
+        on_primary: Callable[[str], bool | None] | None = None,
     ) -> str:
-        if not _classifier_id(settings.classifier):
+        """Select an answer combo, with an optional evidence check for local follow-ups."""
+        classifier = settings.classifier
+        if not _classifier_id(classifier):
             raise RoutingError(
                 "classifier_unset", "Select a provider-qualified OmniRoute System One model."
             )
-        menu = settings.models
+        menu = dict(settings.models)
         unique_models = set(menu.values())
         if (
             set(menu) != set(TIERS)
@@ -367,14 +390,8 @@ class Gateway:
             )
         deadline = time.monotonic() + timeout_s
         self._verify_answer_combos(menu, deadline)
-        payload = {
-            "model": settings.classifier,
-            "state": decision_text,
-            "questions": build_questions(menu, contextual=contextual),
-        }
-        result, headers = self._request("POST", "/systemone", deadline, payload=payload)
-        if settings.classifier.startswith("ollama-local/"):
-            _verify_local_model(settings.classifier, result, headers)
+        questions = build_questions(menu, contextual=contextual)
+        result = self._decision_response(classifier, decision_text, questions, deadline)
         try:
             answer = select_route(result, menu)["selected_model"]
         except (KeyError, TypeError, ValueError):
@@ -386,13 +403,40 @@ class Gateway:
                 "classifier_choice",
                 "The OmniRoute classifier did not choose an available answer combo.",
             )
+
+        if (
+            contextual
+            and answer == menu["routine"]
+            and isinstance(evidence_request, str)
+            and 0 < len(evidence_request) <= MAX_PROMPT_CHARS
+            and evidence_request != decision_text
+            and classifier.startswith(_OLLAMA_LOCAL_PREFIX)
+            and not classifier.casefold().endswith((":cloud", "-cloud"))
+        ):
+            usage = result.get("usage")
+            if isinstance(usage, dict) and usage.get("cost") not in (None, 0):
+                return answer
+            # The caller can retain the verified choice or decline the extra request.
+            if on_primary is not None and on_primary(answer) is False:
+                return answer
+            try:
+                evidence = self._decision_response(
+                    classifier, evidence_request, questions, deadline
+                )
+                _remaining(deadline)
+                select_route(evidence, menu)
+                probabilities = research_probabilities(evidence)
+                if probabilities is not None and sum(probabilities) >= SOURCE_RESEARCH_THRESHOLD:
+                    return menu["bounded"]
+            except (RoutingError, TimeoutError, ValueError):
+                pass
         return answer
 
 
 def _verify_local_model(classifier: str, result: dict, headers: Mapping[str, str]) -> None:
     # OmniRoute forwards Ollama's model field and reports the answered model
     # in this header, using the requested model only when upstream omits it.
-    allowed = (classifier, classifier.removeprefix("ollama-local/"))
+    allowed = (classifier, classifier.removeprefix(_OLLAMA_LOCAL_PREFIX))
     reported = [result["model"]] if "model" in result else []
     if "X-OmniRoute-Model" in headers:
         reported.append(headers["X-OmniRoute-Model"])

@@ -9,10 +9,12 @@ contents; publication is recorded in GitHub Releases.
 
 ### Added
 
-- Backend 0.3.1 can route each user message with a selectable OmniRoute
+- Backend 0.3.2 can route each user message with a selectable OmniRoute
   classifier. Brief follow-ups carry earlier task context, and the classifier
   can change the answer combo as tool results arrive. Routing is opt-in per
-  profile.
+  profile. A reference to a numbered finding can use that item alone.
+  A local classifier can check whether the new request needs fresh evidence.
+  Tool-step decisions include the active tier and the user's objective.
 
 ### Development
 

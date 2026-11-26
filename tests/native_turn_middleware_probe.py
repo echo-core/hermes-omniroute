@@ -137,6 +137,7 @@ def probe(root):
     response_released = Event()
     batch_started, batch_released = Event(), Event()
     late_started, late_released, late_replied = Event(), Event(), Event()
+    evidence_started, evidence_released, evidence_finished = Event(), Event(), Event()
 
     def endpoint(http, method, url, **kwargs):
         assert not http.trust_env and not kwargs["allow_redirects"]
@@ -155,8 +156,7 @@ def probe(root):
         assert method == "POST" and url == BASE + "/systemone"
         body = kwargs["json"]
         state = body["state"]
-        _, _, original = state.partition("Original turn context:\n")
-        turn_context = original or state
+        turn_context = state.partition("\n\nCurrent tier for this task:")[0]
         _, _, latest = turn_context.partition("Latest user instruction: ")
         current = (latest or turn_context).removeprefix("Current request:\n").partition("\n")[0]
         assert (auth == "Bearer fixture-key-b") == (current == "Other profile batch")
@@ -166,7 +166,7 @@ def probe(root):
         if current == "Slow fixture":
             response_blocked.set()
             assert response_released.wait(2)
-        if current == "Fixture batch" and "Completed tool progress:" in state:
+        if current == "Fixture batch" and "Most recent tool results:" in state:
             if "reported an error" in state:
                 batch_started.set()
                 assert batch_released.wait(2)
@@ -177,7 +177,14 @@ def probe(root):
                 tier = "escalation"
                 late_replied.set()
         if current == "Other profile batch":
-            tier = "visual" if "Completed tool progress:" in state else "escalation"
+            tier = "visual" if "Most recent tool results:" in state else "escalation"
+        if current == "Recheck the first finding." and state != current:
+            finish(home_a, "cancel-evidence")
+        if state == "Check the first finding.":
+            # Hold the optional second request past the middleware's deadline.
+            evidence_started.set()
+            assert evidence_released.wait(3)
+            evidence_finished.set()
         return Response(
             {
                 "model": body["model"].removeprefix("ollama-local/"),
@@ -450,6 +457,43 @@ def probe(root):
             "fresh-after-compaction", "Say hello.", [carrier, *compacted_tail], "quick"
         )
         assert task not in state and "PRIVATE" not in state
+
+        referenced_history = [
+            {"role": "user", "content": "Review the installation notes."},
+            {
+                "role": "assistant",
+                "content": "1. The sample can hide a failed command.\n   See `example.txt`.\n2. The link moved.",
+            },
+        ]
+        stage(home_a, "evidence-deadline", "Check the first finding.", referenced_history)
+        with patch.object(routing_module, "DECISION_TIMEOUT", 0.4):
+            try:
+                assert dispatch(home_a, "evidence-deadline") == "quick"
+                assert evidence_started.is_set() and not evidence_finished.is_set()
+            finally:
+                evidence_released.set()
+            assert evidence_finished.wait(2)
+        assert dispatch(home_a, "evidence-deadline", api_id="retry") == "quick"
+        assert "1. The sample can hide a failed command." in calls[-2][2], calls[-2]
+        assert "The link moved" not in calls[-2][2]
+        assert calls[-1][2] == "Check the first finding."
+        finish(home_a, "evidence-deadline")
+
+        first_call = len(calls)
+        closed_worker = Event()
+        original_classify = routing_module.Gateway.classify
+
+        def observe_worker(*args, **kwargs):
+            try:
+                return original_classify(*args, **kwargs)
+            finally:
+                closed_worker.set()
+
+        with patch.object(routing_module.Gateway, "classify", observe_worker):
+            stage(home_a, "cancel-evidence", "Recheck the first finding.", referenced_history)
+            assert dispatch(home_a, "cancel-evidence") == TRIGGER
+            assert closed_worker.wait(2)
+        assert len(calls) == first_call + 1
 
         first_call = len(calls)
         failed_batch = completed_batch("fixture-call-1", {"exit_code": 1})

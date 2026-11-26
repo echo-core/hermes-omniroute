@@ -158,13 +158,22 @@ maintain a separate chat-model list or set a manual context limit.
 With Hermes 0.23.4 in-process plugins, each new user message goes to the
 selected decision model with a bounded excerpt of the conversation. For a
 short follow-up such as “go ahead,” the excerpt can include the earlier task
-and the latest plan or findings. A fresh question can choose a different
-answer combo in the same chat.
+and the latest plan or findings. When a follow-up clearly identifies an item
+in the previous reply's numbered list, the classifier receives the new
+request with a short plain item quoted in place. Longer or formatted items
+are supplied as a separate excerpt. Ambiguous references use the broader excerpt. A fresh
+question can choose a different answer combo in the same chat.
+
+When a local Ollama classifier selects the routine tier for a resolved
+reference, it can check whether the latest request itself needs fresh evidence.
+An approval to carry out the item uses the first decision.
+This check can raise the choice to the bounded tier and shares the original
+decision deadline. The verified first choice is available if that check fails.
 
 During tool use, a completed batch of results gives the decision model
 another opportunity to choose a combo for the remaining work, including the
-final answer. It receives the user’s task and a short description of the tool
-outcome. A retry of the same step reuses its choice.
+final answer. It receives the current tier, the user's objective and a short
+description of the tool outcome. A retry of the same step reuses its choice.
 
 In **Settings → Plugins → Hermes OmniRoute Backend**, set the trigger combo
 and map `routine`, `visual`, `bounded` and `escalation` to four distinct chat

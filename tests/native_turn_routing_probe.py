@@ -334,12 +334,12 @@ def _probe(root):
             assert len(state) <= 4000
             assert PRIVATE_OUTPUT not in state and PRIVATE_ARGUMENT not in state
         for group in (repair_decisions, status_decisions):
-            assert "Completed tool progress:" not in group[0]["state"]
-            for decision in group[1:]:
+            assert "Most recent tool results:" not in group[0]["state"]
+            for previous_tier, decision in zip(("routine", "bounded", "bounded"), group[1:]):
                 state = decision["state"]
-                assert state.startswith("Original turn context:\n")
-                assert "Completed tool progress:" in state
-                assert "Current tier:" not in state
+                assert f"Current tier for this task: {previous_tier}\n" in state
+                assert "Most recent tool results:" in state
+                assert "Work the user requested:" in state
             assert "command execution (reported an error)" in group[1]["state"]
             assert "command execution (completed)" in group[-1]["state"]
         print(

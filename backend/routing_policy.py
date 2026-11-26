@@ -99,27 +99,36 @@ def select_route(result, routes):
     ):
         raise ValueError("Invalid System One decision")
 
-    research = answers.get("research_scope")
-    probabilities = research.get("probabilities") if isinstance(research, dict) else None
-    if isinstance(probabilities, dict):
-        source = probabilities.get("source_research")
-        advanced = probabilities.get("advanced_research")
-        if _is_probability(source) and _is_probability(advanced):
-            if (
-                tier in ("routine", "bounded")
-                and "escalation" in routes
-                and advanced >= ADVANCED_RESEARCH_THRESHOLD
-            ):
-                tier, confidence = "escalation", advanced
-            elif tier == "routine" and "bounded" in routes:
-                total = source + advanced
-                if total >= SOURCE_RESEARCH_THRESHOLD:
-                    tier, confidence = "bounded", min(1, total)
+    if evidence := research_probabilities(result):
+        source, advanced = evidence
+        if (
+            tier in ("routine", "bounded")
+            and "escalation" in routes
+            and advanced >= ADVANCED_RESEARCH_THRESHOLD
+        ):
+            tier, confidence = "escalation", advanced
+        elif tier == "routine" and "bounded" in routes:
+            total = source + advanced
+            if total >= SOURCE_RESEARCH_THRESHOLD:
+                tier, confidence = "bounded", min(1, total)
     return {
         "selected_model": routes[tier],
         "bucket": ROUTE_SPECS[tier][0],
         "confidence": confidence,
     }
+
+
+def research_probabilities(result):
+    """Return the validated source and advanced research probabilities, when present."""
+    answers = result.get("answers") if isinstance(result, dict) else None
+    research = answers.get("research_scope") if isinstance(answers, dict) else None
+    probabilities = research.get("probabilities") if isinstance(research, dict) else None
+    if isinstance(probabilities, dict):
+        source = probabilities.get("source_research")
+        advanced = probabilities.get("advanced_research")
+        if _is_probability(source) and _is_probability(advanced):
+            return source, advanced
+    return None
 
 
 def _is_probability(value):
