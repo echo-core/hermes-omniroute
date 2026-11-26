@@ -28,12 +28,15 @@ class ReleaseNotes(unittest.TestCase):
             "docs/releases/v0.1.0.md",
             "CHANGELOG.md",
             "README.md",
-            "model-provider/plugin.yaml",
-            "backend/plugin.yaml",
         ]:
             target = self.root / name
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / name, target)
+        # These tests exercise the published v0.1.0 notes with their original manifests.
+        for package, version in (("model-provider", "0.2.1"), ("backend", "0.2.3")):
+            target = self.root / package / "plugin.yaml"
+            target.parent.mkdir()
+            target.write_text(f"version: {version}\n")
 
     def notes(self, tag="v0.1.0", repo="example/integration"):
         return release.release_notes(self.root, tag, repo)

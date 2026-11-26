@@ -1,9 +1,9 @@
 name: hermes-omniroute-backend
-version: 0.2.3
+version: 0.3.0
 kind: backend
 author: echo-core
 homepage: https://github.com/echo-core/hermes-omniroute
-description: Regular and Complex images, web search and extraction through OmniRoute.
+description: Images, web search, extraction and optional context-aware chat routing through OmniRoute.
 provides_tools:
   - image_generate_complex
 provides_web_providers:
@@ -12,3 +12,24 @@ requires_env:
   - name: OMNIROUTE_API_KEY
     description: This profile's OmniRoute gateway key
     secret: true
+config_schema:
+  turn_routing_enabled:
+    type: bool
+    default: false
+    label: Route OmniRoute turns
+    description: Use the selected System One classifier to choose one configured answer combo per user turn.
+  turn_routing_trigger:
+    type: str
+    default: auto-gpt
+    label: Trigger combo
+    description: Exact OmniRoute model-picker ID that activates turn routing.
+  turn_routing_classifier:
+    type: str
+    default: ''
+    label: Gateway classifier
+    description: Provider-qualified System One model ID. Use /routing-classifier list to discover models.
+  turn_routing_models:
+    type: dict
+    default: {}
+    label: Answer combos
+    description: Map routine, visual, bounded, and escalation to four distinct OmniRoute combo IDs.

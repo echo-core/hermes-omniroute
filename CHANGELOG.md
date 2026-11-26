@@ -7,6 +7,12 @@ contents; publication is recorded in GitHub Releases.
 
 ## Unreleased
 
+### Added
+
+- Backend 0.3.0 can use a selectable OmniRoute System One decision model to
+  choose one answer combo per user turn, including follow-ups that refer to
+  earlier work. Routing is opt-in per profile.
+
 ### Development
 
 - Give GitHub up to one minute to expose a newly published release before the

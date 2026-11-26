@@ -153,6 +153,34 @@ groups, such as `auto/fast` and `auto/gpt`, appear when your key can access them
 The plugin reads the gateway's catalog and context metadata; you do not need to
 maintain a separate chat-model list or set a manual context limit.
 
+#### Optional routing for follow-up turns
+
+With Hermes 0.23.4 in-process plugins, the backend can choose an answer combo
+once per user turn. The decision model sees the current request and a bounded
+excerpt of the preceding task or plan. Tool calls and the final answer use the
+chosen combo. A new user message starts a new decision.
+
+In **Settings → Plugins → Hermes OmniRoute Backend**, set the trigger combo
+and map `routine`, `visual`, `bounded` and `escalation` to four distinct chat
+combos available to this profile. Use `/routing-classifier list` to see
+compatible System One models and `/routing-classifier select <provider/model>`
+to select one. A gateway with a combo-only catalog can return an empty list.
+Enter the exact classifier ID in that case. OmniRoute enforces the model and
+connection grants when the classifier runs.
+
+Enable **Route OmniRoute turns** and reload the plugin through the profile’s
+native lifecycle. Select the trigger combo in chat. Changing the classifier
+takes effect on the next user turn. Discovery, classification and chat all
+use that profile’s OmniRoute URL and key. Each answer combo retains its
+configured provider priority and fallback. For a local Ollama classifier,
+the gateway must permit the `decisions` endpoint, the chosen model and its
+connection, and have `SYSTEMONE_OLLAMA_LOCAL_BACKEND_ENABLED` enabled.
+
+If classification fails or times out, Hermes sends the original combo and
+records the reason in the Hermes log. The original combo can then run its
+own native classifier. Turn routing defaults off. To revert, switch it off
+and reload the plugin.
+
 ### Images
 
 Regular uses Hermes's `image_generate` tool. Complex uses the additional
