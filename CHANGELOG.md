@@ -16,6 +16,11 @@ contents; publication is recorded in GitHub Releases.
   A local classifier can check whether the new request needs fresh evidence.
   Tool-step decisions include the active tier and the user's objective.
 
+### Fixed
+
+- Backend 0.3.3 keeps a pending offer in the routing context when a user
+  acknowledges it, the assistant waits, and the user later approves the work.
+
 ### Development
 
 - Give GitHub up to one minute to expose a newly published release before the

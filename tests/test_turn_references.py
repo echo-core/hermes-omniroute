@@ -218,3 +218,62 @@ def test_rich_or_long_item_keeps_its_own_section(body):
     assert _render_reference(ask, match, item).endswith(
         f"Preceding assistant plan or result:\n{item}"
     )
+
+
+def test_approval_recovers_the_pending_offer_after_receipts(_native_context_helpers):
+    design = "Compare three venue schedules under conflicting budget and accessibility constraints."
+    repair = "Correct the export separator and verify the round trip."
+    pending = "Shall I apply the fix and run the tests?"
+    old = [{"role": "user", "content": design}, {"role": "assistant", "content": "Done."}]
+    active = [{"role": "user", "content": repair}, {"role": "assistant", "content": pending}]
+    receipts = [
+        {"role": "user", "content": "Understood."},
+        {"role": "assistant", "content": "I’ll wait."},
+        {"role": "user", "content": "Noted."},
+        {"role": "assistant", "content": "Standing by."},
+    ]
+    history = old + active + receipts
+    for approval in ("Go ahead.", "Go", "Thanks, go ahead.", "Yes."):
+        state, contextual, objective, resolved = render_turn_context(approval, history)
+        assert contextual and not resolved
+        assert objective == repair and pending in state and design not in state
+        assert "Understood." not in state and state.endswith(approval)
+    fresh = "How many minutes are in an hour?"
+    state, _, objective, _ = render_turn_context(fresh, history)
+    assert objective == fresh and repair not in state
+
+
+def test_approval_does_not_revive_superseded_or_opaque_turns(_native_context_helpers):
+    pending = "Shall I implement the proposed plan?"
+    original = {"role": "user", "content": "Compare the candidate schedules and their tradeoffs."}
+    receipt = {"role": "user", "content": "Understood."}
+    waiting = {"role": "assistant", "content": "I will wait."}
+    proposal = {"role": "assistant", "content": pending}
+    for history in (
+        [original, {**proposal, "content": pending + " The plan was canceled."}, receipt, waiting],
+        [
+            original,
+            {**proposal, "content": "That is complete. Shall I rewrite the title?"},
+            receipt,
+            waiting,
+        ],
+        [original, proposal, receipt, {**waiting, "content": "Shall I rewrite the title instead?"}],
+        [original, proposal, receipt, {**waiting, "tool_calls": [{"id": "synthetic"}]}],
+        [
+            original,
+            proposal,
+            receipt,
+            {**waiting, "content": [{"type": "text", "text": "I will wait."}]},
+        ],
+        [original, proposal, {"role": "tool", "content": "Synthetic result"}, receipt, waiting],
+        [
+            original,
+            proposal,
+            {"role": "user", "content": "Cancel the design."},
+            waiting,
+            receipt,
+            waiting,
+        ],
+    ):
+        state, _, _, _ = render_turn_context("Go ahead.", history)
+        assert original["content"] not in state, state

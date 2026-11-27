@@ -40,6 +40,32 @@ _ACK_PHRASE = (
     r"(?:i|we) (?:will|can) (?:do|continue with) (?:that|it)"
 )
 _ACKNOWLEDGMENT = re.compile(rf"(?:{_ACK_PHRASE})(?:[,.!] +(?:{_ACK_PHRASE}))*[.!…]*", re.I)
+_RESUME = re.compile(
+    r"(?:go(?: ahead)?|proceed|continue|do (?:it|that)|fix (?:it|that)|ship it|try again|yes)\b",
+    re.I,
+)
+_RECEIPT = re.compile(
+    r"(?:understood|noted|much appreciated|gotcha|got it|thanks|thank you|okay|ok)"
+    r"(?:[, ]+(?:thanks|thank you))?[.!…]*",
+    re.I,
+)
+_IDLE_REPLY = re.compile(
+    r"(?:(?:okay|ok|understood|sure|of course|no problem)[,.!]?\s+)?"
+    r"(?:i(?:['’]ll| will) (?:wait|hold off)(?: for (?:now|your (?:go-ahead|approval|confirmation)))?"
+    r"|you(?:['’]re| are) welcome|standing by|of course|no problem)[.!…]*",
+    re.I,
+)
+_PENDING_OFFER = re.compile(
+    r"\b(?:(?:shall|should) (?:i|we)|(?:would you like|do you want)(?: me| us)? to)\b"
+    r"|\b(?:awaiting|pending|once (?:i|we) (?:have|get)) your (?:approval|confirmation)\b",
+    re.I,
+)
+_CLOSED_WORK = re.compile(
+    r"\b(?:is|was|already|have|has|been) (?:already )?"
+    r"(?:complete(?:d)?|done|finished|delivered|cancel[l]?ed|withdrawn|resolved)\b"
+    r"|\b(?:no (?:pending|remaining) work|nothing (?:left|pending))\b",
+    re.I,
+)
 _VISUAL_PARTS = frozenset({"image", "image_url", "input_image"})
 _TEXT_PARTS = frozenset({"text", "input_text", "output_text"})
 _CREDENTIAL_HEADERS = frozenset({"authorization", "api-key", "x-api-key", "x-omniroute-api-key"})
@@ -344,6 +370,51 @@ def _render_reference(current, match, item):
     return f"Current request:\n{current}\n\nPreceding assistant plan or result:\n{item}"
 
 
+def _pending_work_before_receipts(history):
+    """Recover an offered task across adjacent receipts when a later reply accepts the offer."""
+    from gateway.response_filters import is_machinery_display_kind
+    from session_rules.turns import is_compaction_summary_message
+
+    rows = iter(islice(reversed(history), MAX_HISTORY_EXCHANGES))
+    skipped = False
+    for answer in rows:
+        ask = next(rows, None)
+        if not (
+            isinstance(answer, dict)
+            and answer.get("role") == "assistant"
+            and isinstance(content := answer.get("content"), str)
+            and not answer.get("tool_calls")
+            and not is_machinery_display_kind(answer.get("display_kind"))
+            and isinstance(ask, dict)
+            and ask.get("role") == "user"
+            and not is_compaction_summary_message(ask)
+        ):
+            break
+        task, visual = _historical_user_input(ask)
+        if not (task or visual):
+            break
+        if not visual and _RECEIPT.fullmatch(task):
+            if len(content) > 240 or not (
+                _IDLE_REPLY.fullmatch(content.strip()) or _RECEIPT.fullmatch(content.strip())
+            ):
+                break
+            skipped = True
+            continue
+        if skipped and not _ACKNOWLEDGMENT.fullmatch(task) and not _refers_back(task):
+            plan, attachment = _text_and_visual(content, limit=2000)
+            # A quoted or superseded offer earlier in the answer is insufficient.
+            closing = re.split(r"[.!?]\s+|\n+", plan)[-1]
+            if (
+                not attachment
+                and len(content) <= 2000
+                and _PENDING_OFFER.search(closing)
+                and not _CLOSED_WORK.search(plan)
+            ):
+                return task, plan, visual, ""
+        break
+    return None
+
+
 def _previous_work(history):
     """Find the work a short continuation refers to, using only user and assistant text."""
     from session_rules.turns import is_compaction_summary_message
@@ -435,7 +506,11 @@ def render_turn_context(user_message, conversation_history, *, prior_tier=None, 
     if not (current or visual):
         return "", False, "", False
 
-    previous, reply, previous_visual, progress = _previous_work(conversation_history)
+    pending = None
+    bare_go = current.rstrip(".!…").casefold() == "go"
+    if not visual and (bare_go or (_ACKNOWLEDGMENT.fullmatch(current) and _RESUME.search(current))):
+        pending = _pending_work_before_receipts(conversation_history)
+    previous, reply, previous_visual, progress = pending or _previous_work(conversation_history)
     if (
         not visual
         and not previous_visual
@@ -459,7 +534,7 @@ def render_turn_context(user_message, conversation_history, *, prior_tier=None, 
     if prior_tier in ROUTE_SPECS:
         notes.append(f"Previous tier: {prior_tier}")
 
-    if previous and _ACKNOWLEDGMENT.fullmatch(current):
+    if previous and (pending or _ACKNOWLEDGMENT.fullmatch(current)):
         # On an approval, lead with what the user authorized. Repeating the approval
         # as the main task makes a small classifier label substantive work as routine.
         suffix = "\n\n".join([f"Latest user instruction: {current}", *notes])

@@ -158,7 +158,8 @@ maintain a separate chat-model list or set a manual context limit.
 With Hermes 0.23.4 in-process plugins, each new user message goes to the
 selected decision model with a bounded excerpt of the conversation. For a
 short follow-up such as “go ahead,” the excerpt can include the earlier task
-and the latest plan or findings. When a follow-up clearly identifies an item
+and the latest plan or findings. If a brief acknowledgment and a waiting reply
+intervene, a later approval can still carry the task and the outstanding offer. When a follow-up clearly identifies an item
 in the previous reply's numbered list, the classifier receives the new
 request with a short plain item quoted in place. Longer or formatted items
 are supplied as a separate excerpt. Ambiguous references use the broader excerpt. A fresh
