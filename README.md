@@ -180,7 +180,8 @@ or unavailable results keep the first choice. Both calls share the turn deadline
 For skill invocations, routing uses the skill name and the user’s instruction before
 applying the context limit. When Hermes appends runtime guidance to a text skill invocation,
 the plugin places that guidance before the original request in the same user message.
-The answer model can then resolve references such as “rewrite this” against the conversation.
+For a short edit request such as “rewrite this,” the plugin labels the immediately preceding
+plain assistant answer as the source. The source stays in the assistant role and retains its full text.
 
 During tool use, a completed batch of results gives the decision model
 another opportunity to choose a combo for the remaining work, including the

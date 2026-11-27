@@ -1,5 +1,6 @@
 """Exercise native turn hooks and request middleware in two disposable Hermes profiles."""
 
+import hashlib
 import json
 import os
 import shutil
@@ -447,7 +448,12 @@ def probe(root):
             + "\n[End supplemental runtime context]\n\n"
             + ask
         )
-        expected = history + [{**batch[0], "content": separated}, *batch[1:]]
+        expected = [
+            history[0],
+            {**history[1], "content": routing_module._EDIT_SOURCE_LABEL + "\n" + target},
+            {**batch[0], "content": separated + "\n\n" + routing_module._EDIT_SOURCE_NOTE},
+            *batch[1:],
+        ]
         assert dispatch(home_b, "skill", messages=history + batch) == TRIGGER
         assert (
             dispatch(home_a, "direct-skill", model="direct", messages=history + batch) == "direct"
@@ -472,6 +478,26 @@ def probe(root):
         assert len(states) == 2
         assert all("/copy-editor rewrite this" in state and target in state for state in states)
         assert all("PRIVATE" not in state and len(state) <= 4000 for state in states)
+        plain = history + [{"role": "user", "content": ask}]
+        # The same edit binding works without another plugin's context and is idempotent.
+        signature = (len(ask), hashlib.sha256(ask.encode()).digest())
+        layout = routing_module._skill_message_layout
+        bound = layout(plain, signature)
+        assert bound[-1]["content"] == ask + "\n\n" + routing_module._EDIT_SOURCE_NOTE
+        assert bound[-2]["content"].endswith(target) and layout(bound, signature) == bound
+        assert plain[-2]["content"] == target and plain[-1]["content"] == ask
+        for preceding in (
+            {"role": "tool", "content": "tool output"},
+            {"role": "assistant", "content": target, "tool_calls": [{"id": "fixture"}]},
+            {"role": "assistant", "content": target, "display_kind": "failed_turn"},
+            {"role": "assistant", "content": [{"type": "text", "text": target}]},
+        ):
+            rows = [*history, preceding, plain[-1]]
+            assert layout(rows, signature) == rows
+        for instruction in ("rewrite the observatory summary", "rewrite this: use the bakery"):
+            explicit = ask.removesuffix("rewrite this") + instruction
+            rows = history + [{"role": "user", "content": explicit}]
+            assert layout(rows, (len(explicit), hashlib.sha256(explicit.encode()).digest())) == rows
         finish(home_a, "skill")
         stage(home_a, "bare-skill", skill)
         assert dispatch(home_a, "bare-skill") == "quick"

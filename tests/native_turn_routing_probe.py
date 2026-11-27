@@ -342,7 +342,11 @@ def _probe(root):
                 )
                 for body in chat_calls[first:]:
                     user = next(m for m in reversed(body["messages"]) if m["role"] == "user")
-                    assert user["content"].endswith(skill)
+                    assert "entire preceding assistant answer" in user["content"].split(skill)[1]
+                    prior = body["messages"][body["messages"].index(user) - 1]
+                    assert prior["role"] == "assistant" and prior["content"].endswith(target)
+                    assert prior["content"].startswith("[Source passage")
+                    assert target not in user["content"]
                     assert user["content"].count(reminder) == 1
                     assert user["content"].index(reminder) < user["content"].index(skill)
                 for decision in skill_decisions:

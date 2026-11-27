@@ -200,6 +200,40 @@ def _skill_request(content):
     return content, False
 
 
+_PREVIOUS_ANSWER_EDIT = re.compile(
+    r"(?:please\s+)?(?:rewrite|rephrase|revise|edit|summari[sz]e|shorten|simplify|humanize)"
+    r"\s+(?:this|that|it|(?:your |the )?(?:previous|last|preceding) (?:answer|reply|response|turn))"
+    r"(?:\s+please)?[.!?]?",
+    re.I,
+)
+_EDIT_SOURCE_LABEL = "[Source passage for the following edit request]"
+_EDIT_SOURCE_NOTE = (
+    "The source of this edit is the entire preceding assistant answer labeled "
+    + _EDIT_SOURCE_LABEL
+    + ". Apply the requested edit to that answer."
+)
+
+
+def _selected_edit_source(original, prior):
+    from session_rules.turns import (
+        extract_user_instruction_from_skill_message,
+        is_compaction_summary_message,
+    )
+
+    ask = extract_user_instruction_from_skill_message(original)
+    if not ask or not _PREVIOUS_ANSWER_EDIT.fullmatch(ask.strip()):
+        return None
+    if not isinstance(prior, dict) or prior.get("role") != "assistant":
+        return None
+    if any(prior.get(key) for key in ("tool_calls", "function_call", "display_kind")):
+        return None
+    content = prior.get("content")
+    if not isinstance(content, str) or not content.strip() or is_compaction_summary_message(prior):
+        return None
+    # Keep the full source in its original role, including any quoted instructions.
+    return {**prior, "content": _EDIT_SOURCE_LABEL + "\n" + content}
+
+
 def _skill_message_layout(messages, signature):
     """Keep native supplemental context separate from the verified original skill text."""
     if signature is None or not isinstance(messages, list):
@@ -210,20 +244,31 @@ def _skill_message_layout(messages, signature):
         if not isinstance(row, dict) or row.get("role") != "user":
             continue
         content = row.get("content")
-        if not isinstance(content, str) or content[size : size + 2] != "\n\n":
+        if not isinstance(content, str) or len(content) < size:
             break
-        original, supplemental = content[:size], content[size + 2 :]
-        if not supplemental or sha256(original.encode(errors="surrogatepass")).digest() != digest:
+        original, tail = content[:size], content[size:]
+        if tail and not tail.startswith("\n\n"):
             break
-        # Both pieces retain their original user role. Mark the boundary so a
-        # trailing hook reminder cannot become the implicit target of "edit this".
-        separated = (
-            "[Supplemental runtime context]\n"
-            + supplemental
-            + "\n[End supplemental runtime context]\n\n"
-            + original
-        )
-        return [*messages[:index], {**row, "content": separated}, *messages[index + 1 :]]
+        if sha256(original.encode(errors="surrogatepass")).digest() != digest:
+            break
+        supplemental = tail[2:]
+        current = original
+        if supplemental:
+            current = (
+                "[Supplemental runtime context]\n"
+                + supplemental
+                + "\n[End supplemental runtime context]\n\n"
+                + original
+            )
+        prefix = messages[:index]
+        if tail == "\n\n" + _EDIT_SOURCE_NOTE:
+            break  # A previously bound request with no supplemental context.
+        if prefix and (source := _selected_edit_source(original, prefix[-1])) is not None:
+            prefix[-1] = source
+            current += "\n\n" + _EDIT_SOURCE_NOTE
+        if current != content:
+            return [*prefix, {**row, "content": current}, *messages[index + 1 :]]
+        break
     return messages
 
 

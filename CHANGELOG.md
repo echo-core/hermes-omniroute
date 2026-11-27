@@ -18,6 +18,8 @@ contents; publication is recorded in GitHub Releases.
 
 ### Fixed
 
+- Backend 0.3.6 binds short skill-edit requests to the preceding assistant answer.
+
 - Backend 0.3.5 preserves the typed instruction and preceding conversation when
   routing expanded skills and clarifies the source of edits for the answer model.
 
