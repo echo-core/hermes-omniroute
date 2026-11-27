@@ -177,6 +177,11 @@ reply. It receives a bounded excerpt of the dialogue about approval. A wait
 probability of at least 70% selects the configured routine combo. Uncertain
 or unavailable results keep the first choice. Both calls share the turn deadline.
 
+For skill invocations, routing uses the skill name and the user’s instruction before
+applying the context limit. When Hermes appends runtime guidance to a text skill invocation,
+the plugin places that guidance before the original request in the same user message.
+The answer model can then resolve references such as “rewrite this” against the conversation.
+
 During tool use, a completed batch of results gives the decision model
 another opportunity to choose a combo for the remaining work, including the
 final answer. It receives the current tier, the user's objective and a short

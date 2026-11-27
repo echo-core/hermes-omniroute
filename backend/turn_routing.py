@@ -172,6 +172,61 @@ def _text_and_visual(content, limit=MAX_PROMPT_CHARS):
     return redact_sensitive_text(text, force=True).strip()[:limit], visual
 
 
+def _skill_request(content):
+    """Recover the skill name and typed ask before truncation, preserving attachments."""
+    try:
+        from session_rules.turns import (
+            describe_skill_invocation,
+            extract_user_instruction_from_skill_message,
+        )
+    except ImportError:  # Older hosts have no native skill-scaffold parser.
+        return content, False
+
+    if isinstance(content, str):
+        description = describe_skill_invocation(content, separator=" ")
+        if description is not None:
+            return description, bool(extract_user_instruction_from_skill_message(content))
+    elif isinstance(content, list):
+        parts = []
+        has_instruction = False
+        for part in content:
+            if isinstance(part, dict) and part.get("type") in _TEXT_PARTS:
+                if isinstance(text := part.get("text"), str):
+                    compact, instructed = _skill_request(text)
+                    part = {**part, "text": compact}
+                    has_instruction |= instructed
+            parts.append(part)
+        return parts, has_instruction
+    return content, False
+
+
+def _skill_message_layout(messages, signature):
+    """Keep native supplemental context separate from the verified original skill text."""
+    if signature is None or not isinstance(messages, list):
+        return messages
+    size, digest = signature
+    for index in reversed(range(len(messages))):
+        row = messages[index]
+        if not isinstance(row, dict) or row.get("role") != "user":
+            continue
+        content = row.get("content")
+        if not isinstance(content, str) or content[size : size + 2] != "\n\n":
+            break
+        original, supplemental = content[:size], content[size + 2 :]
+        if not supplemental or sha256(original.encode(errors="surrogatepass")).digest() != digest:
+            break
+        # Both pieces retain their original user role. Mark the boundary so a
+        # trailing hook reminder cannot become the implicit target of "edit this".
+        separated = (
+            "[Supplemental runtime context]\n"
+            + supplemental
+            + "\n[End supplemental runtime context]\n\n"
+            + original
+        )
+        return [*messages[:index], {**row, "content": separated}, *messages[index + 1 :]]
+    return messages
+
+
 def _historical_user_input(message):
     from agent.conversation_compression_scaffolding import is_user_role_scaffolding
     from agent.message_metadata import typed_ask_text
@@ -208,7 +263,8 @@ def _historical_user_input(message):
             ),
             "",
         )
-    text, visual = _text_and_visual(typed if typed is not None else content, limit=1400)
+    ask, _ = _skill_request(typed if typed is not None else content)
+    text, visual = _text_and_visual(ask, limit=1400)
     visual |= _has_visual(content)
     return ("", False) if text.startswith(STEER_MARKER_OPEN) else (text, visual)
 
@@ -672,6 +728,7 @@ class _Turn:
     objective: str = field(repr=False)
     resolved_reference: bool
     receipt_check: str | None = field(default=None, repr=False)
+    skill_signature: tuple[int, bytes] | None = field(default=None, repr=False)
     base_url: str | None = None
     identity: tuple[str, bytes] | None = None
     identity_change_logged: bool = False
@@ -776,8 +833,9 @@ class _Router:
             if key in self.turns or len(self.turns) >= MAX_TURNS:
                 return
             prior_tier = self.prior_tiers.get((session_id, sender_id))
+        routing_request, skill_instruction = _skill_request(user_message)
         text, contextual, objective, resolved_reference = render_turn_context(
-            user_message, history[:-1], prior_tier=prior_tier, has_visual=has_visual
+            routing_request, history[:-1], prior_tier=prior_tier, has_visual=has_visual
         )
         if not text:
             return
@@ -799,6 +857,12 @@ class _Router:
                     objective,
                     resolved_reference,
                     receipt_check=receipt_check,
+                    skill_signature=(
+                        len(user_message),
+                        sha256(user_message.encode(errors="surrogatepass")).digest(),
+                    )
+                    if skill_instruction and isinstance(user_message, str)
+                    else None,
                 )
                 self._schedule_expiration(now)
 
@@ -899,8 +963,16 @@ class _Router:
                     self.prior_tiers.move_to_end(prior_key)
                 while len(self.prior_tiers) > MAX_TURNS:
                     self.prior_tiers.popitem(last=False)
+        payload = {**request, "model": model_choice}
+        messages = request.get("messages")
+        if (
+            turn.skill_signature
+            and isinstance(messages, list)
+            and messages == original_request.get("messages")
+        ):
+            payload["messages"] = _skill_message_layout(messages, turn.skill_signature)
         return {
-            "request": {**request, "model": model_choice},
+            "request": payload,
             "source": SOURCE,
             "reason": "selected for current turn step",
         }

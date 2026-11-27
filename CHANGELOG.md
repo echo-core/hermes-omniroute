@@ -18,6 +18,9 @@ contents; publication is recorded in GitHub Releases.
 
 ### Fixed
 
+- Backend 0.3.5 preserves the typed instruction and preceding conversation when
+  routing expanded skills and clarifies the source of edits for the answer model.
+
 - Backend 0.3.4 can use a brief local follow-up check to route courtesies and
   requests to wait to the routine combo while preserving agreed start signals.
 

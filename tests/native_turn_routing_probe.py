@@ -211,7 +211,7 @@ def _probe(root):
         agent.compression_enabled = False
         return agent
 
-    def run_turn(agent, ask, answer, tiers, *, tools=(), history=(), retries=0):
+    def run_turn(agent, ask, answer, tiers, *, tools=(), history=(), retries=0, routed_ask=None):
         assert len(tiers) == len(tools) + 1
         first_chat, first_decision = len(chat_calls), len(decision_calls)
         first_tool = len(executed)
@@ -229,7 +229,7 @@ def _probe(root):
         decisions = decision_calls[first_decision:]
         assert len(chats) == len(tiers) + retries and len(decisions) == len(tiers)
         assert all(body.get("tools") for body in chats)
-        assert all(ask in decision["state"] for decision in decisions)
+        assert all((routed_ask or ask) in decision["state"] for decision in decisions)
         return result["messages"], [body["model"] for body in chats], decisions
 
     try:
@@ -318,6 +318,36 @@ def _probe(root):
                 )
                 assert sequences["fresh"] == [ROUTES["routine"]]
                 assert fresh_decisions[0]["state"] == "Say hello."
+                reminder = "Additional runtime guidance supplied by another fixture plugin."
+                get_plugin_manager()._hooks["pre_llm_call"].append(lambda **_: reminder)
+                skill = (
+                    '[IMPORTANT: The user has invoked the "copy-editor" skill, indicating they want '
+                    "you to follow its instructions. The full skill content is loaded below.]\n"
+                    + "Style example. " * 600
+                    + "\nThe user has provided the following instruction alongside the skill invocation: rewrite this"
+                )
+                target = "The two public telescopes will reopen tomorrow."
+                first = len(chat_calls)
+                _, _, skill_decisions = run_turn(
+                    fresh,
+                    skill,
+                    "The telescopes reopen tomorrow.",
+                    ["bounded", "routine"],
+                    history=[
+                        {"role": "user", "content": "When can we visit?"},
+                        {"role": "assistant", "content": target},
+                    ],
+                    tools=(VERIFY,),
+                    routed_ask="/copy-editor rewrite this",
+                )
+                for body in chat_calls[first:]:
+                    user = next(m for m in reversed(body["messages"]) if m["role"] == "user")
+                    assert user["content"].endswith(skill)
+                    assert user["content"].count(reminder) == 1
+                    assert user["content"].index(reminder) < user["content"].index(skill)
+                for decision in skill_decisions:
+                    assert target in decision["state"] and reminder not in decision["state"]
+
             finally:
                 fresh.close()
 

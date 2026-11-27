@@ -266,6 +266,7 @@ def probe(root):
         client_key=None,
         extra_headers=None,
         messages=None,
+        expected_messages=None,
     ):
         key = client_key or f"fixture-key-{home.name}"
         client = SimpleNamespace(
@@ -302,7 +303,10 @@ def probe(root):
                 api_call_count=0,
             )
         assert result.original_payload == payload
-        assert {**result.payload, "model": model} == payload
+        expected = (
+            {**payload, "messages": expected_messages} if expected_messages is not None else payload
+        )
+        assert {**result.payload, "model": model} == expected
         return result.payload["model"]
 
     def finish(home, turn, *, session="chat"):
@@ -414,6 +418,73 @@ def probe(root):
             "Slow fixture",
         ]
         assert calls[-1][0].startswith("Describe the diagram")
+
+        skill = (
+            '[IMPORTANT: The user has invoked the "copy-editor" skill, indicating they want '
+            "you to follow its instructions. The full skill content is loaded below.]\n"
+            + "PRIVATE SKILL EXAMPLE "
+            * 500
+        )
+        ask = (
+            skill
+            + "\nThe user has provided the following instruction alongside the skill invocation: rewrite this"
+        )
+        target = "The eastern dome closes on Monday."
+        history = [
+            {"role": "user", "content": "Explain the observatory schedule."},
+            {"role": "assistant", "content": target},
+        ]
+        stage(home_a, "skill", ask, history)
+        stage(home_b, "skill", ask, history)
+        stage(home_a, "direct-skill", ask, history, model="direct")
+        batch = completed_batch("skill-call", {"success": True})
+        reminder = "PRIVATE unrelated runtime reminder"
+        batch[0]["content"] = ask + "\n\n" + reminder
+        batch[1]["tool_calls"][0]["function"]["name"] = "skill_view"
+        separated = (
+            "[Supplemental runtime context]\n"
+            + reminder
+            + "\n[End supplemental runtime context]\n\n"
+            + ask
+        )
+        expected = history + [{**batch[0], "content": separated}, *batch[1:]]
+        assert dispatch(home_b, "skill", messages=history + batch) == TRIGGER
+        assert (
+            dispatch(home_a, "direct-skill", model="direct", messages=history + batch) == "direct"
+        )
+        first = len(calls)
+        assert (
+            dispatch(home_a, "skill", messages=history + batch[:1], expected_messages=expected[:-2])
+            == "quick"
+        )
+        assert (
+            dispatch(home_a, "skill", messages=history + batch, expected_messages=expected)
+            == "quick"
+        )
+        assert dispatch(home_a, "skill", messages=expected) == "quick"
+        assert (
+            dispatch(
+                home_a, "skill", messages=[*expected, {"role": "user", "content": "another turn"}]
+            )
+            == "quick"
+        )
+        states = [state for _, _, state in calls[first:]]
+        assert len(states) == 2
+        assert all("/copy-editor rewrite this" in state and target in state for state in states)
+        assert all("PRIVATE" not in state and len(state) <= 4000 for state in states)
+        finish(home_a, "skill")
+        stage(home_a, "bare-skill", skill)
+        assert dispatch(home_a, "bare-skill") == "quick"
+        assert calls[-1][0] == "/copy-editor"
+        finish(home_a, "bare-skill")
+        caption = {"type": "text", "text": ask}
+        image = {"type": "image_url", "image_url": {"url": "fixture"}}
+        compact, instructed = routing_module._skill_request([caption, image])
+        assert instructed and compact == [
+            {"type": "text", "text": "/copy-editor rewrite this"},
+            image,
+        ]
+        assert caption["text"] == ask
 
         before_receipt = len(calls)
         courtesy = [
