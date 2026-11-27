@@ -415,6 +415,68 @@ def _pending_work_before_receipts(history):
     return None
 
 
+_HOLD = re.compile(
+    r"(?:(?:thanks|thank you)[,.]?\s+)?(?:please\s+)?(?:wait|pause|hold off)(?:\s+for now)?[.!…]*",
+    re.I,
+)
+_COORDINATION = re.compile(
+    r"\b(?:approval|approv\w*|acknowledg\w*|reply|signal|confirm\w*|wait|hold off|go.ahead|say|tell you)\b",
+    re.I,
+)
+
+
+def _receipt_check_input(current, history):
+    """Build a short dialogue for the optional receipt check, preserving earlier agreements."""
+    from gateway.response_filters import is_machinery_display_kind
+    from session_rules.turns import is_compaction_summary_message
+
+    if not isinstance(current, str):
+        return None
+    current = current.strip()
+    if current.rstrip(".!…").casefold() in {"ok", "okay"}:
+        return None
+    if not (_RECEIPT.fullmatch(current) or _HOLD.fullmatch(current)):
+        return None
+    if not 2 <= len(history) <= MAX_HISTORY_EXCHANGES:
+        return None
+    recent = []
+    characters = 0
+    for index, row in enumerate(history):
+        if not isinstance(row, dict) or is_compaction_summary_message(row):
+            return None
+        role = row.get("role")
+        last_pair = index >= len(history) - 2
+        if last_pair and role != ("user" if index == len(history) - 2 else "assistant"):
+            return None
+        if role not in ("user", "assistant") or is_machinery_display_kind(row.get("display_kind")):
+            if last_pair:
+                return None
+            continue
+        content = row.get("content")
+        if not last_pair and role == "assistant" and row.get("tool_calls") and not content:
+            continue
+        if row.get("tool_calls") or not isinstance(content, str) or len(content) > 1400:
+            return None
+        text, visual = _historical_user_input(row) if role == "user" else _text_and_visual(content)
+        if visual or not text:
+            return None
+        if index == len(history) - 2:
+            clauses = re.split(r"(?<=[.!?])\s+(?=[A-Z“])", text)
+            text = "\n".join(
+                clause
+                for number, clause in enumerate(clauses)
+                if (number > 0 and number == len(clauses) - 1)
+                or _COORDINATION.search(clause)
+                or current.rstrip(".!").casefold() in clause.casefold()
+            )
+        if text:
+            recent.append(text)
+            characters += len(text) + 1
+        if characters + len(current) > MAX_PROMPT_CHARS:
+            return None
+    return "\n".join([*recent, current])
+
+
 def _previous_work(history):
     """Find the work a short continuation refers to, using only user and assistant text."""
     from session_rules.turns import is_compaction_summary_message
@@ -609,6 +671,7 @@ class _Turn:
     contextual: bool
     objective: str = field(repr=False)
     resolved_reference: bool
+    receipt_check: str | None = field(default=None, repr=False)
     base_url: str | None = None
     identity: tuple[str, bytes] | None = None
     identity_change_logged: bool = False
@@ -618,6 +681,7 @@ class _Turn:
     def close(self):
         self.text = ""
         self.objective = ""
+        self.receipt_check = None
         self.batches.clear()
         if self.current is not None:
             self.current.ready.set()
@@ -717,6 +781,11 @@ class _Router:
         )
         if not text:
             return
+        receipt_check = (
+            _receipt_check_input(user_message, history[:-1])
+            if settings.classifier.startswith("ollama-local/") and not has_visual
+            else None
+        )
         with self.lock:
             if key not in self.turns and len(self.turns) < MAX_TURNS:
                 now = time.monotonic()
@@ -729,6 +798,7 @@ class _Router:
                     contextual,
                     objective,
                     resolved_reference,
+                    receipt_check=receipt_check,
                 )
                 self._schedule_expiration(now)
 
@@ -798,6 +868,7 @@ class _Router:
                 decision,
                 text,
                 contextual=turn.contextual,
+                receipt_check=turn.receipt_check,
                 evidence_request=(
                     turn.objective
                     if turn.resolved_reference and not _only_delegates(turn.objective)
@@ -874,7 +945,9 @@ class _Router:
             with self.lock:
                 self._resolve(decision, reason="classifier timeout")
 
-    def _start_decision(self, turn, decision, text, *, contextual, evidence_request=None):
+    def _start_decision(
+        self, turn, decision, text, *, contextual, evidence_request=None, receipt_check=None
+    ):
         if decision.ready.is_set() or time.monotonic() >= decision.deadline:
             return
         try:
@@ -887,6 +960,7 @@ class _Router:
                 if turn.identity is None:
                     turn.text = ""
                     turn.objective = ""
+                    turn.receipt_check = None
                 self._resolve(decision, reason=reason)
             return
         with self.lock:
@@ -924,7 +998,8 @@ class _Router:
                     contextual=contextual,
                     timeout_s=timeout,
                     evidence_request=evidence_request,
-                    on_primary=keep_primary if evidence_request else None,
+                    receipt_check=receipt_check,
+                    on_primary=keep_primary if evidence_request or receipt_check else None,
                 )
                 if choice == turn.settings.trigger or choice not in turn.settings.models.values():
                     raise RoutingError(

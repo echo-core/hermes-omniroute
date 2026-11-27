@@ -163,6 +163,23 @@ def probe(root):
         with lock:
             calls.append((current, body["model"], state))
         tier = {"Bad output": "invalid", "Go ahead.": "bounded"}.get(current, "routine")
+        if current == "Understood." and "courtesy fixture" in state:
+            tier = "escalation"
+        if set(body["questions"]) == {"response"}:
+            assert state.endswith("Understood.")
+            assert "PRIVATE" not in state
+            return Response(
+                {
+                    "model": body["model"].removeprefix("ollama-local/"),
+                    "answers": {
+                        "response": {
+                            "type": "choice",
+                            "choice": "wait",
+                            "probabilities": {"wait": 0.9, "act": 0.1},
+                        }
+                    },
+                }
+            )
         if current == "Slow fixture":
             response_blocked.set()
             assert response_released.wait(2)
@@ -397,6 +414,36 @@ def probe(root):
             "Slow fixture",
         ]
         assert calls[-1][0].startswith("Describe the diagram")
+
+        before_receipt = len(calls)
+        courtesy = [
+            {"role": "system", "content": "PRIVATE SYSTEM"},
+            {"role": "tool", "content": "PRIVATE TOOL"},
+            {
+                "role": "user",
+                "content": "Design the courtesy fixture. Wait for approval.",
+                "api_content": "PRIVATE RECALL",
+            },
+            {"role": "assistant", "content": "Shall I design the schedule?"},
+        ]
+        for reply in ("Okay.", "Thanks, go ahead.", "Wait until the tests pass."):
+            assert routing_module._receipt_check_input(reply, courtesy) is None
+        assert routing_module._receipt_check_input("Understood.", courtesy[:-1]) is None
+        assert (
+            routing_module._receipt_check_input("Understood.", [*courtesy, {"role": "tool"}])
+            is None
+        )
+        older = {"role": "user", "content": "When I say I have read it, begin the work."}
+        assert older["content"] in routing_module._receipt_check_input(
+            "Understood.", [older, *courtesy]
+        )
+        stage(home_a, "receipt", "Understood.", courtesy)
+        assert dispatch(home_a, "receipt") == "quick"
+        assert len(calls) == before_receipt + 2
+        assert "courtesy fixture" not in calls[-1][2] and "Wait for approval." in calls[-1][2]
+        assert dispatch(home_a, "receipt", api_id="receipt-retry") == "quick"
+        assert len(calls) == before_receipt + 2
+        finish(home_a, "receipt")
 
         checks = (
             ("Any progress?", "The investigation is underway."),

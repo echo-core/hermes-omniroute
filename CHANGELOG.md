@@ -18,6 +18,9 @@ contents; publication is recorded in GitHub Releases.
 
 ### Fixed
 
+- Backend 0.3.4 can use a brief local follow-up check to route courtesies and
+  requests to wait to the routine combo while preserving agreed start signals.
+
 - Backend 0.3.3 keeps a pending offer in the routing context when a user
   acknowledges it, the assistant waits, and the user later approves the work.
 

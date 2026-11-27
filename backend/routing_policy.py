@@ -118,6 +118,37 @@ def select_route(result, routes):
     }
 
 
+RECEIPT_QUESTIONS = {
+    "response": {
+        "type": "choice",
+        "instructions": "Which assistant response follows from the latest user message? Honor any instruction defining how to interpret it.",
+        "criteria": {
+            "wait": "Give a brief social reply or wait for a separate go-ahead.",
+            "act": "Perform the work. The user just gave an affirmative answer or the reply is an agreed signal to proceed.",
+        },
+    }
+}
+
+
+def confident_receipt(result):
+    answers = result.get("answers") if isinstance(result, dict) else None
+    response = answers.get("response") if isinstance(answers, dict) else None
+    if (
+        not isinstance(response, dict)
+        or response.get("choice") != "wait"
+        or response.get("type") != "choice"
+    ):
+        return False
+    scores = response.get("probabilities")
+    if not isinstance(scores, dict) or set(scores) != {"act", "wait"}:
+        return False
+    return (
+        all(_is_probability(value) for value in scores.values())
+        and abs(sum(scores.values()) - 1) < 0.001
+        and scores["wait"] >= 0.70
+    )
+
+
 def research_probabilities(result):
     """Return the validated source and advanced research probabilities, when present."""
     answers = result.get("answers") if isinstance(result, dict) else None

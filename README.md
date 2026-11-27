@@ -171,6 +171,12 @@ An approval to carry out the item uses the first decision.
 This check can raise the choice to the bounded tier and shares the original
 decision deadline. The verified first choice is available if that check fails.
 
+For a short acknowledgment or request to wait, a local classifier that initially
+selects bounded or escalation can make one more decision about the immediate
+reply. It receives a bounded excerpt of the dialogue about approval. A wait
+probability of at least 70% selects the configured routine combo. Uncertain
+or unavailable results keep the first choice. Both calls share the turn deadline.
+
 During tool use, a completed batch of results gives the decision model
 another opportunity to choose a combo for the remaining work, including the
 final answer. It receives the current tier, the user's objective and a short

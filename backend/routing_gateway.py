@@ -13,8 +13,10 @@ from urllib.parse import urlsplit
 
 from .routing_policy import (
     MAX_PROMPT_CHARS,
+    RECEIPT_QUESTIONS,
     SOURCE_RESEARCH_THRESHOLD,
     build_questions,
+    confident_receipt,
     research_probabilities,
     select_route,
 )
@@ -364,6 +366,7 @@ class Gateway:
         contextual=False,
         timeout_s=2.0,
         evidence_request: str | None = None,
+        receipt_check: str | None = None,
         on_primary: Callable[[str], bool | None] | None = None,
     ) -> str:
         """Select an answer combo, with an optional evidence check for local follow-ups."""
@@ -404,12 +407,15 @@ class Gateway:
                 "The OmniRoute classifier did not choose an available answer combo.",
             )
 
+        check_receipt = answer in (menu["bounded"], menu["escalation"]) and bool(receipt_check)
+        follow_up = evidence_request if answer == menu["routine"] else None
+        if check_receipt:
+            follow_up = receipt_check
         if (
             contextual
-            and answer == menu["routine"]
-            and isinstance(evidence_request, str)
-            and 0 < len(evidence_request) <= MAX_PROMPT_CHARS
-            and evidence_request != decision_text
+            and isinstance(follow_up, str)
+            and 0 < len(follow_up) <= MAX_PROMPT_CHARS
+            and follow_up != decision_text
             and classifier.startswith(_OLLAMA_LOCAL_PREFIX)
             and not classifier.casefold().endswith((":cloud", "-cloud"))
         ):
@@ -421,9 +427,14 @@ class Gateway:
                 return answer
             try:
                 evidence = self._decision_response(
-                    classifier, evidence_request, questions, deadline
+                    classifier,
+                    follow_up,
+                    RECEIPT_QUESTIONS if check_receipt else questions,
+                    deadline,
                 )
                 _remaining(deadline)
+                if check_receipt:
+                    return menu["routine"] if confident_receipt(evidence) else answer
                 select_route(evidence, menu)
                 probabilities = research_probabilities(evidence)
                 if probabilities is not None and sum(probabilities) >= SOURCE_RESEARCH_THRESHOLD:

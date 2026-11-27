@@ -600,3 +600,99 @@ def test_extra_follow_up_uses_only_the_remaining_budget(monkeypatch, mock_http, 
             == ROUTES["routine"]
         )
         assert [call[2]["timeout"] for call in calls] == [2.0, 1.75, 1.25]
+
+
+@pytest.mark.parametrize(
+    ("choice", "wait", "expected"),
+    [("wait", 0.70, "routine"), ("wait", 0.69, "escalation"), ("act", 0.1, "escalation")],
+)
+def test_local_receipt_check_preserves_primary_unless_wait_is_confident(
+    mock_http, choice, wait, expected
+):
+    calls, replies = mock_http
+    model = "fixture-local"
+    replies.extend(
+        [
+            Response(_catalog(*_combos())),
+            Response(_decision("escalation", model=model)),
+            Response(
+                {
+                    "model": model,
+                    "answers": {
+                        "response": {
+                            "type": "choice",
+                            "choice": choice,
+                            "probabilities": {"wait": wait, "act": 1 - wait},
+                        }
+                    },
+                }
+            ),
+        ]
+    )
+    saved = []
+    result = gateway.Gateway(BASE_A, PROFILE_A).classify(
+        _settings("ollama-local/" + model),
+        "Original context",
+        contextual=True,
+        receipt_check="Shall I do it?\nUnderstood.",
+        on_primary=saved.append,
+    )
+    assert saved == [ROUTES["escalation"]]
+    assert result == ROUTES[expected]
+    assert set(calls[-1][2]["json"]["questions"]) == {"response"}
+
+
+@pytest.mark.parametrize(
+    "classifier,tier",
+    [
+        ("openai/fixture", "escalation"),
+        ("ollama-local/fixture:cloud", "bounded"),
+        ("ollama-local/fixture", "visual"),
+        ("ollama-local/fixture", "routine"),
+    ],
+)
+def test_receipt_check_only_reassesses_nonvisual_work_on_local_models(mock_http, classifier, tier):
+    calls, replies = mock_http
+    replies.extend(
+        [Response(_catalog(*_combos())), Response(_decision(tier, model=classifier.split("/")[1]))]
+    )
+    result = gateway.Gateway(BASE_A, PROFILE_A).classify(
+        _settings(classifier),
+        "Original context",
+        contextual=True,
+        receipt_check="Thank you.",
+    )
+    assert result == ROUTES[tier]
+    assert len(calls) == 2
+
+
+def test_malformed_receipt_check_keeps_the_verified_first_choice(mock_http):
+    _, replies = mock_http
+    model = "fixture-local"
+    replies.extend(
+        [
+            Response(_catalog(*_combos())),
+            Response(_decision("bounded", model=model)),
+            Response(
+                {
+                    "model": model,
+                    "answers": {
+                        "response": {
+                            "type": "choice",
+                            "choice": "wait",
+                            "probabilities": {"wait": 0.99, "act": 0.99},
+                        }
+                    },
+                }
+            ),
+        ]
+    )
+    saved = []
+    result = gateway.Gateway(BASE_A, PROFILE_A).classify(
+        _settings("ollama-local/" + model),
+        "Original context",
+        contextual=True,
+        receipt_check="I'll wait.\nThanks.",
+        on_primary=saved.append,
+    )
+    assert result == ROUTES["bounded"] and saved == [result]
